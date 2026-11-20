@@ -20,22 +20,34 @@ fn app() -> App {
     a
 }
 fn aim(a: &mut App) {
-    let id = &a.web.as_ref().unwrap().doors[0].anchor;
-    let anchor = a.themes[a.theme_index]
-        .host
-        .anchors
-        .iter()
-        .find(|x| &x.id == id)
-        .unwrap();
-    a.pose = Pose {
-        position: [anchor.at[0], -2.8],
-        yaw: 0.0,
-        pitch: -0.2,
-    };
+    if a.world.explicit_target.is_none() {
+        let id = &a.web.as_ref().unwrap().doors[0].anchor;
+        let anchor = a.themes[a.theme_index]
+            .host
+            .anchors
+            .iter()
+            .find(|x| &x.id == id)
+            .unwrap();
+        a.pose = Pose {
+            position: [anchor.at[0], a.themes[a.theme_index].host.room[1] + 0.5],
+            yaw: 0.0,
+            pitch: -0.2,
+        };
+        hair::interaction::refresh(&a.themes[a.theme_index].host, &a.pose, &mut a.world);
+        a.world.explicit_target = a.world.interaction.clone();
+    }
+    a.pose.position = [-3.6, a.themes[a.theme_index].host.room[1] + 0.5];
     hair::interaction::refresh(&a.themes[a.theme_index].host, &a.pose, &mut a.world);
 }
 fn view(a: &App) -> hair::web::portals::View {
-    hair::web::portals::view(&a.world, &a.web.as_ref().unwrap().doors[0].anchor).unwrap()
+    let anchor = a
+        .world
+        .explicit_target
+        .as_ref()
+        .or(a.world.interaction.as_ref())
+        .map(|t| t.anchor.as_str())
+        .unwrap_or(&a.web.as_ref().unwrap().doors[0].anchor);
+    hair::web::portals::view(&a.world, anchor).unwrap()
 }
 fn tap(a: &mut App, k: KeyCode) {
     a.key(k, true, false).unwrap();
@@ -75,13 +87,19 @@ fn grouped_input_adapter_latches_context_focus_escape_and_exact_displayed_follow
     assert!(a.menu.is_some());
     tap(&mut a, KeyCode::Escape);
     assert!(a.menu.is_none() && !a.input.captured);
+    let before_focus = a.world.explicit_target.clone();
+    let before_doors = a.web.as_ref().unwrap().doors.clone();
     a.focus_changed(false);
     tap(&mut a, KeyCode::Tab);
     tap(&mut a, KeyCode::KeyE);
     assert!(a.web.as_ref().unwrap().pending.is_none());
-    assert_eq!(view(&a), selected);
+    assert_eq!(a.world.explicit_target, before_focus);
+    assert_eq!(a.web.as_ref().unwrap().doors, before_doors);
     a.focus_changed(true);
     aim(&mut a);
+    if view(&a).destination != selected.destination {
+        tap(&mut a, KeyCode::Tab);
+    }
     let prompt = a.world.interaction.as_ref().unwrap();
     assert_eq!(
         prompt.destination.as_deref(),
@@ -123,8 +141,17 @@ fn grouped_refresh_preserves_surviving_selection_and_explicitly_recovers_removal
     );
     assert_eq!(view(&a).title, "Renamed second");
     assert!(!view(&a).recovered);
-    assert_eq!(a.themes[1].host, host);
+    assert_eq!(a.themes[1].host.room, host.room);
+    assert_eq!(a.themes[1].host.geometry, host.geometry);
     assert_eq!(a.pose.position, pose.position);
+    assert!(
+        a.web
+            .as_ref()
+            .unwrap()
+            .doors
+            .iter()
+            .any(|d| d.resource == selected.destination)
+    );
     a.web.as_mut().unwrap().fetcher = |a, _, _| {
         Page::html(
             a,
@@ -133,11 +160,24 @@ fn grouped_refresh_preserves_surviving_selection_and_explicitly_recovers_removal
     };
     tap(&mut a, KeyCode::F5);
     finish(&mut a);
-    assert!(view(&a).recovered);
+    assert!(
+        a.world.explicit_target.is_none(),
+        "removed physical door cannot retain authority"
+    );
+    assert!(
+        !a.web
+            .as_ref()
+            .unwrap()
+            .doors
+            .iter()
+            .any(|d| d.resource == selected.destination)
+    );
     assert!(a.web.as_ref().unwrap().status.contains("removed"));
-    assert_eq!(a.themes[1].host, host);
+    assert_eq!(a.themes[1].host.room, host.room);
+    assert_eq!(a.themes[1].host.geometry, host.geometry);
     assert_eq!(a.pose.position, pose.position);
     assert_eq!(a.web.as_ref().unwrap().history.len(), 0);
+    aim(&mut a);
     let recovered = view(&a).destination;
     tap(&mut a, KeyCode::KeyE);
     finish(&mut a);
@@ -150,10 +190,50 @@ fn grouped_preview_changes_only_appearance_and_has_visible_accurate_label_and_ad
     let pose = a.pose;
     a.world.explicit_target = a.world.interaction.clone();
     let first_vertices = a.themes[1].vertices_for(&a.world);
+    let fingerprints = |a: &App, vertices: &[hair::assets::Vertex]| {
+        a.web
+            .as_ref()
+            .unwrap()
+            .doors
+            .iter()
+            .map(|d| {
+                let anchor = a.themes[1]
+                    .host
+                    .anchors
+                    .iter()
+                    .find(|x| x.id == d.anchor)
+                    .unwrap();
+                let z = anchor.at[2] + anchor.size[2] * 0.5 + 0.065;
+                let colors = vertices
+                    .iter()
+                    .filter(|v| {
+                        (v.position[2] - z).abs() < 0.00001
+                            && (v.position[0] - anchor.at[0]).abs()
+                                <= anchor.size[0] * 0.38 + 0.00001
+                    })
+                    .map(|v| v.color)
+                    .collect::<Vec<_>>();
+                let expected = hair::web::portals::fallback(&d.destinations[0])
+                    .into_iter()
+                    .flat_map(|c| [c; 6])
+                    .collect::<Vec<_>>();
+                assert_eq!(colors, expected, "own target fingerprint at {}", d.anchor);
+                colors
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected_fingerprints = fingerprints(&a, &first_vertices);
+    // Verify the actual per-door color/position binding before changing selection.
+    assert_eq!(expected_fingerprints.len(), 2);
     let first_overlay = hair::text::overlay(&a.world, 960, 640, 0);
     let first = view(&a);
     tap(&mut a, KeyCode::Tab);
     let second = view(&a);
+    assert_eq!(
+        fingerprints(&a, &a.themes[1].vertices_for(&a.world)),
+        expected_fingerprints,
+        "Tab must leave every door bound to its own fingerprint"
+    );
     assert_ne!(
         hair::web::portals::fallback(&first.destination),
         hair::web::portals::fallback(&second.destination)

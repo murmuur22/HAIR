@@ -394,7 +394,17 @@ fn web_refresh_preserves_safe_camera_reader_selection_and_surviving_landmarks() 
     assert_eq!(a.theme_index, 1);
     assert_eq!(a.themes[1].source, source);
     for anchor in &host.anchors {
-        assert!(a.themes[1].host.anchors.contains(anchor));
+        let after = a.themes[1]
+            .host
+            .anchors
+            .iter()
+            .find(|x| x.id == anchor.id)
+            .unwrap();
+        assert_eq!(after.binding, anchor.binding);
+        assert_eq!(after.role, anchor.role);
+        if anchor.role != "portal" {
+            assert_eq!(after, anchor);
+        }
     }
     assert_eq!(a.web.as_ref().unwrap().history.len(), 0);
 }

@@ -62,6 +62,34 @@ fn source(a: &App) -> Arc<hair::web::HtmlSession> {
         .clone()
 }
 #[test]
+fn dense_middle_window_records_both_continuation_exits_without_false_cap() {
+    let mut a = enter();
+    go(&mut a, "web-next-window");
+    let room = &a.exploration.rooms[a.exploration.current.unwrap()];
+    assert_eq!(
+        room.exits.len(),
+        66,
+        "64 links plus Previous and Next are real exits"
+    );
+    assert!(
+        !a.exploration.limited,
+        "maximum legitimate window is not a recording overflow"
+    );
+    assert!(
+        room.exits
+            .contains(&hair::exploration::RoomId::new(BOARD, 0))
+    );
+    assert!(
+        room.exits
+            .contains(&hair::exploration::RoomId::new(BOARD, 2))
+    );
+    for p in &room.layout.as_ref().unwrap().ports {
+        if let Some(target) = p.target {
+            assert!(room.exits.contains(&target));
+        }
+    }
+}
+#[test]
 fn actual_next_previous_no_fetch_and_reciprocal_arrival() {
     let mut a = enter();
     let held = source(&a);

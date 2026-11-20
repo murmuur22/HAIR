@@ -280,7 +280,7 @@ mod tests {
         assert!(g.world.document().unwrap().contains("Content"));
         assert_eq!(g.world.graph.pages.len(), 1);
         assert_eq!(g.world.reader_links().len(), 4);
-        assert_eq!(g.doors.len(), 2);
+        assert_eq!(g.doors.len(), 3);
         assert_eq!(
             g.doors.iter().map(|d| d.destinations.len()).sum::<usize>(),
             3
@@ -334,7 +334,7 @@ mod tests {
             crate::content::Destination::External("https://example.org/one?q=AB%2Fcd#x".into())
         );
         let generated = page.generate().unwrap();
-        assert!(generated.doors.len() <= 8);
+        assert_eq!(generated.doors.len(), 15);
         assert_eq!(
             generated
                 .doors

@@ -706,8 +706,8 @@ impl Renderer {
                     || (*mode == crate::exploration::MapMode::Expanded && !world.tree_collapsed)
             });
             if !disclosure_owns_space {
-                ui.extend(crate::text::exploration_map::overlay(
-                    map, *mode, pose.yaw, ui_w, ui_h,
+                ui.extend(crate::text::exploration_map::overlay_at(
+                    map, *mode, pose, ui_w, ui_h,
                 ));
             }
         }

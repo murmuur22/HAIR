@@ -25,14 +25,15 @@ fn failure_warning_belongs_to_exact_destination_not_entire_group() {
             .as_deref(),
         Some("Timed out")
     );
-    hair::web::portals::cycle(&mut g.world, &anchor, false);
+    let other = g.doors[1].anchor.clone();
+    assert_ne!(anchor, other);
+    assert!(!hair::web::portals::cycle(&mut g.world, &anchor, false));
     assert!(
-        hair::web::portals::view(&g.world, &anchor)
+        hair::web::portals::view(&g.world, &other)
             .unwrap()
             .last_failure
             .is_none()
     );
-    hair::web::portals::cycle(&mut g.world, &anchor, true);
     assert!(
         hair::web::portals::view(&g.world, &anchor)
             .unwrap()

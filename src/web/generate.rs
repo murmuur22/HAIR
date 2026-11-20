@@ -7,14 +7,12 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-pub(super) fn slot(resource: &str) -> usize {
-    usize::from(Sha256::digest(resource.as_bytes())[0] % 8)
-}
 pub(super) fn anchor_id(resource: &str) -> String {
-    format!("web-slot-{}", slot(resource))
+    let digest = format!("{:x}", Sha256::digest(resource.as_bytes()));
+    format!("web-slot-{}", &digest[..32])
 }
-/// Eight immutable physical link slots. Continuation has separate typed actions
-/// and opposing side apertures, never fabricated HTTPS destinations.
+/// One stable identity for each full resolved destination. Physical placement
+/// is deterministic within the acquired room, not an eight-way hash bucket.
 pub(super) fn build(page: Page) -> Result<Generated> {
     if page.links.len() > 64
         || page.text.len() > 16384
@@ -42,36 +40,40 @@ pub(super) fn build(page: Page) -> Result<Generated> {
     let previous = page.previous_cursor()?;
     let next = page.next_cursor()?;
     let id = page.address.original.clone();
-    let mut groups = BTreeMap::<usize, (String, Vec<String>)>::new();
+    let mut groups = BTreeMap::<String, (String, Vec<String>)>::new();
     for link in &page.links {
         if let Destination::External(raw) = &link.destination {
-            let mut url = reqwest::Url::parse(raw).map_err(|e| e.to_string())?;
-            url.set_fragment(None); // Resource placement only; full targets survive.
-            let (representative, targets) = groups
-                .entry(slot(url.as_str()))
-                .or_insert_with(|| (url.to_string(), Vec::new()));
-            if url.as_str() < representative.as_str() {
-                *representative = url.to_string();
-            }
-            if !targets.contains(raw) {
-                targets.push(raw.clone());
-            }
+            reqwest::Url::parse(raw).map_err(|e| e.to_string())?;
+            groups
+                .entry(raw.clone())
+                .or_insert_with(|| (raw.clone(), vec![raw.clone()]));
         }
     }
-    for (_, destinations) in groups.values_mut() {
-        destinations.sort();
-    }
+    let count = groups.len();
     let mut host = HostScene::shared_default();
-    host.version = 2;
-    host.name = "Generated web room v3 (grouped fixed slots)".into();
-    host.room = [-8.0, -3.75, 8.0, 3.75];
+    host.version = 3;
+    host.name = "Generated individual-door web room".into();
+    // Content-density tiers extend the hallway axis independently. Bounds stay
+    // within the existing host coordinate and route-work budgets.
+    let length = match count {
+        0..=8 => 7.5,
+        9..=16 => 11.5,
+        17..=32 => 19.5,
+        _ => 26.0,
+    };
+    let side_count = count.saturating_sub(9).div_ceil(2);
+    let length = f32::max(length, 6.0 + side_count as f32 * 2.4);
+    let half_width = 8.0 + page.sections.len().saturating_sub(1).min(4) as f32;
+    host.room = [-half_width, -length * 0.5, half_width, length * 0.5];
     host.anchors.retain(|a| a.role != "portal");
     for a in &mut host.anchors {
         if a.role == "document" {
             a.binding = "explicit-page".into();
         }
         if a.role == "image" {
-            a.at = [-8.2, 0.7, 0.0];
+            // Reserve the front corner before the first side opening; a
+            // centre-wall image would span a doorway in dense hallways.
+            a.at = [host.room[0] - 0.2, 0.7, host.room[1] + 0.8];
             a.size = [0.04, 1.0, 1.5];
         }
     }
@@ -92,18 +94,56 @@ pub(super) fn build(page: Page) -> Result<Generated> {
         height: 2.3,
     });
     let mut doors = Vec::new();
-    for (slot, (resource, destinations)) in groups {
+    for (index, (_, (resource, destinations))) in groups.into_iter().enumerate() {
         let anchor = anchor_id(&resource);
         let cross_origin = destinations.iter().any(|raw| {
             reqwest::Url::parse(raw).is_ok_and(|u| u.origin() != page.address.url.origin())
         });
+        let (at, size, wall) = if index < 5 {
+            (
+                [-4.8 + index as f32 * 2.4, 0.1, host.room[1] - 0.25],
+                [1.4, 2.5, 0.2],
+                None,
+            )
+        } else if index < 9 {
+            (
+                [[-4.8, -2.4, 2.4, 4.8][index - 5], 0.0, host.room[3] + 0.5],
+                [1.4, 2.1, 0.2],
+                Some(Wall::Rear),
+            )
+        } else {
+            let ordinal = index - 9;
+            let wall = if ordinal.is_multiple_of(2) {
+                Wall::Left
+            } else {
+                Wall::Right
+            };
+            let x = if wall == Wall::Left {
+                host.room[0] - 0.5
+            } else {
+                host.room[2] + 0.5
+            };
+            (
+                [x, 0.0, host.room[1] + 2.4 + (ordinal / 2) as f32 * 2.4],
+                [0.2, 2.1, 1.4],
+                Some(wall),
+            )
+        };
         host.anchors.push(Anchor {
             id: anchor.clone(),
             role: "portal".into(),
-            at: [-7.2 + slot as f32 * 1.8, 0.1, -4.0],
-            size: [1.4, 2.5, 0.2],
+            at,
+            size,
             binding: "explicit-door".into(),
         });
+        if let Some(wall) = wall {
+            host.wall_apertures.push(WallAperture {
+                anchor: anchor.clone(),
+                wall,
+                width: 1.6,
+                height: 2.3,
+            });
+        }
         doors.push(Door {
             anchor,
             resource,
@@ -125,21 +165,21 @@ pub(super) fn build(page: Page) -> Result<Generated> {
             "web-previous-window",
             "Previous room — same held response",
             Wall::Left,
-            -8.5,
+            host.room[0] - 0.5,
         ),
         (
             next,
             "web-next-window",
             "Next room — more content in same held response",
             Wall::Right,
-            8.5,
+            host.room[2] + 0.5,
         ),
     ] {
         if let Some(cursor) = cursor {
             host.anchors.push(Anchor {
                 id: anchor.into(),
                 role: "portal".into(),
-                at: [x, 0.0, 2.0],
+                at: [x, 0.0, host.room[3] - 1.6],
                 size: [0.2, 2.1, 1.4],
                 binding: "explicit-door".into(),
             });
@@ -162,7 +202,7 @@ pub(super) fn build(page: Page) -> Result<Generated> {
         }
     }
     let mut pocket = super::pocket::populate(&page, &mut host, disclosure.as_deref());
-    host = HostScene::parse(&toml::to_string(&host).map_err(|e| e.to_string())?)?;
+    host = HostScene::parse_generated(&toml::to_string(&host).map_err(|e| e.to_string())?)?;
     let mut text = if let Some(disclosure) = &disclosure {
         format!("{}\n{}\n\n{}\n\n", page.title, id, disclosure)
     } else {

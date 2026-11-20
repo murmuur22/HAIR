@@ -187,16 +187,27 @@ fn closed_reader_refresh_keeps_surviving_aimed_selection_and_e_destination() {
     assert_eq!(target.anchor, d.anchor);
     tap(&mut a, KeyCode::F5);
     finish(&mut a);
+    let next = a.themes[1]
+        .host
+        .anchors
+        .iter()
+        .find(|x| x.id == target.anchor)
+        .unwrap();
+    let inside = a.themes[1].host.portal_inward(&target.anchor);
+    a.pose.position = [next.at[0] + inside[0], next.at[2] + inside[1]];
+    a.pose.yaw = (-inside[0]).atan2(inside[1]);
+    hair::interaction::refresh(&a.themes[1].host, &a.pose, &mut a.world);
     assert_eq!(
         hair::interaction::resolve(&a.themes[1].host, &a.pose, &a.world).unwrap(),
         target
     );
+    let departure = a.pose.position;
     tap(&mut a, KeyCode::KeyE);
     finish(&mut a);
     assert_eq!(a.world.current, d.destinations[0]);
     assert_eq!(a.theme_index, 1);
     tap(&mut a, KeyCode::KeyR);
-    assert_eq!(a.pose.position, [0.0, -2.8]);
+    assert_eq!(a.pose.position, departure);
     assert_eq!(a.world.current, "https://example.org/one?q=AB%2Fcd#top");
 }
 fn pixels(p: &Path) -> Vec<u8> {

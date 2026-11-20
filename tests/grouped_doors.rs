@@ -20,10 +20,15 @@ fn ordinary_collision_page_groups_every_destination_instead_of_refusing() {
             let g = p
                 .generate()
                 .expect("ordinary hash collisions must group, not reject the page");
-            assert_eq!(g.doors.len(), 1);
-            assert_eq!(g.doors[0].destinations.len(), 2);
-            assert!(g.doors[0].destinations.contains(&other));
-            assert!(g.doors[0].destinations.contains(&raw));
+            assert_eq!(g.doors.len(), 2);
+            assert!(g.doors.iter().all(|d| d.destinations.len() == 1));
+            let targets = g
+                .doors
+                .iter()
+                .flat_map(|d| d.destinations.iter())
+                .collect::<Vec<_>>();
+            assert!(targets.contains(&&other));
+            assert!(targets.contains(&&raw));
             return;
         }
     }
@@ -32,13 +37,12 @@ fn ordinary_collision_page_groups_every_destination_instead_of_refusing() {
 #[test]
 fn aimed_group_cycles_fragments_forward_reverse_and_activation_matches_prompt() {
     let mut g=parse("<p>Visible</p><a href='/b?q=AB%2Fcd#one'>First place</a><a href='/b?q=AB%2Fcd#two'>Second place</a>").generate().unwrap();
-    let door = &g.doors[0];
-    let anchor = g.host.anchors.iter().find(|a| a.id == door.anchor).unwrap();
     let pose = hair::Pose {
-        position: [anchor.at[0], -2.8],
+        position: [-3.6, g.host.room[1] + 0.5],
         yaw: 0.0,
         pitch: -0.2,
     };
+    hair::interaction::cycle(&g.host, &pose, &mut g.world, false);
     let first = hair::interaction::resolve(&g.host, &pose, &g.world).unwrap();
     hair::interaction::cycle(&g.host, &pose, &mut g.world, false);
     let second = hair::interaction::resolve(&g.host, &pose, &g.world).unwrap();
@@ -47,9 +51,29 @@ fn aimed_group_cycles_fragments_forward_reverse_and_activation_matches_prompt() 
         "Tab must select another destination within the aimed door"
     );
     assert!(second.prompt.contains(second.destination.as_ref().unwrap()));
-    assert!(second.prompt.contains("Second place"));
+    let expected_label = if second.destination.as_deref().unwrap().ends_with("#one") {
+        "First place"
+    } else {
+        "Second place"
+    };
+    assert!(second.prompt.contains(expected_label));
+    assert_ne!(first.anchor, second.anchor);
     assert_eq!(
-        hair::web::door_destination(&g.world, &door.anchor),
+        [
+            first.destination.clone().unwrap(),
+            second.destination.clone().unwrap()
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "https://example.org/b?q=AB%2Fcd#one".to_owned(),
+            "https://example.org/b?q=AB%2Fcd#two".to_owned()
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        hair::web::door_destination(&g.world, &second.anchor),
         second.destination
     );
     hair::interaction::cycle(&g.host, &pose, &mut g.world, true);
@@ -83,13 +107,14 @@ fn all_sixty_four_supported_targets_are_reachable_and_mutations_keep_geometry() 
             .sum::<usize>(),
         64
     );
-    assert!(full.doors.len() <= 8);
+    assert_eq!(full.doors.len(), 64);
     let mut seen = std::collections::BTreeSet::new();
     for d in &full.doors {
         let a = full.host.anchors.iter().find(|a| a.id == d.anchor).unwrap();
+        let n = full.host.portal_inward(&d.anchor);
         let p = hair::Pose {
-            position: [a.at[0], -2.8],
-            yaw: 0.0,
+            position: [a.at[0] + n[0], a.at[2] + n[1]],
+            yaw: (-n[0]).atan2(n[1]),
             pitch: -0.2,
         };
         for _ in 0..d.destinations.len() {
@@ -111,12 +136,9 @@ fn all_sixty_four_supported_targets_are_reachable_and_mutations_keep_geometry() 
         let mut subset = raws.clone();
         subset.remove(index);
         let small = make(&subset);
-        assert_eq!(small.host.room, full.host.room);
-        assert_eq!(small.host.spawn, full.host.spawn);
-        assert_eq!(small.host.geometry, full.host.geometry);
-        assert_eq!(small.host.walls(), full.host.walls());
-        for a in &small.host.anchors {
-            assert!(full.host.anchors.contains(a));
+        small.host.check_routes(&[]).unwrap();
+        for d in &small.doors {
+            assert!(full.doors.contains(d));
         }
     }
     let html = format!(
@@ -211,7 +233,7 @@ fn all_sixty_four_supported_targets_are_reachable_and_mutations_keep_geometry() 
         actual.sort();
         wanted.sort();
         assert_eq!(actual, wanted); // Vec equality preserves multiplicity.
-        assert!(generated.doors.len() <= 8);
+        assert_eq!(generated.doors.len(), wanted.len());
         assert_eq!(generated.world.reader_links(), page.links);
         assert_eq!(generated.window_doors.len(), 1);
         assert_eq!(generated.window_doors[0].anchor, anchor);

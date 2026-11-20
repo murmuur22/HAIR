@@ -30,6 +30,157 @@ const MAX_EXITS: usize = 64;
 /// Up, right, down, left in screen cells.
 const DIRS: [[i64; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 
+#[path = "exploration_focus.rs"]
+mod focus;
+
+#[cfg(test)]
+mod focus_contract {
+    use super::*;
+    use crate::exploration::{Port, RoomId, RoomLayout};
+    #[test]
+    fn compact_preserves_aim_and_cross_side_connectors_never_cross_focus_interior() {
+        let a = RoomId::new("https://test/a", 0);
+        let b = RoomId::new("https://test/b", 0);
+        let mut m = Map::default();
+        m.arrive(b, "B", [], Connection::Portal, false);
+        m.arrive(a, "A", [b], Connection::Portal, false);
+        m.rooms[1].layout = Some(RoomLayout {
+            bounds: [-8.0, -32.0, 8.0, 32.0],
+            ports: vec![Port {
+                anchor: "side".into(),
+                position: [8.5, 0.0],
+                inward: [-1.0, 0.0],
+                target: Some(b),
+                kind: Connection::Portal,
+            }],
+        });
+        for (w, h) in [(640, 480), (800, 533)] {
+            let s = focus::scene(&m, MapMode::Compact, w, h).unwrap();
+            let c = [w as f32 * 0.5, h as f32 * 0.5];
+            assert!(
+                s.panel[0] > c[0] + 24.0
+                    || s.panel[2] < c[0] - 24.0
+                    || s.panel[1] > c[1] + 24.0
+                    || s.panel[3] < c[1] - 24.0,
+                "compact covers aim"
+            );
+            let r = s.nodes[0].rect;
+            for path in &s.paths {
+                for pair in path.points.windows(2) {
+                    let a = pair[0];
+                    let b = pair[1];
+                    let crosses = if (a[0] - b[0]).abs() < 0.01 {
+                        a[0] > r[0] + 1.0
+                            && a[0] < r[2] - 1.0
+                            && a[1].min(b[1]) < r[3] - 1.0
+                            && a[1].max(b[1]) > r[1] + 1.0
+                    } else {
+                        a[1] > r[1] + 1.0
+                            && a[1] < r[3] - 1.0
+                            && a[0].min(b[0]) < r[2] - 1.0
+                            && a[0].max(b[0]) > r[0] + 1.0
+                    };
+                    assert!(!crosses, "connector hidden under current room: {pair:?}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn physical_focus_is_bounded_at_every_supported_scale_and_records_omissions() {
+        let mut m = Map::default();
+        for i in 0..128 {
+            m.arrive(
+                RoomId::new(&format!("https://test/{i}"), 0),
+                "Room",
+                [],
+                Connection::Portal,
+                false,
+            );
+            let n = m.current.unwrap();
+            m.rooms[n].layout = Some(RoomLayout {
+                bounds: [-8.0, -36.6, 8.0, 36.6],
+                ports: Vec::new(),
+            });
+        }
+        for (w, h) in [
+            (640, 480),
+            (800, 600),
+            (960, 640),
+            (1280, 960),
+            (1920, 1280),
+        ] {
+            for mode in [MapMode::Compact, MapMode::Expanded] {
+                let s = focus::scene(&m, mode, w, h).unwrap();
+                assert_eq!(s.nodes.len() + s.omitted, 128);
+                assert!(s.nodes.len() <= 13);
+                let v = overlay(&m, mode, 0.0, w, h);
+                assert!(!v.is_empty() && v.len() < 100_000);
+                assert!(
+                    v.iter().all(|v| v
+                        .position
+                        .iter()
+                        .all(|v| v.is_finite() && (-1.001..=1.001).contains(v))),
+                    "bounded screen vertices {w}x{h}"
+                );
+            }
+        }
+        assert!(overlay(&m, MapMode::Hidden, 0.0, 960, 640).is_empty());
+    }
+    #[test]
+    fn current_room_has_physical_proportions_ports_and_separate_progress() {
+        let a = RoomId::new("https://test/a", 0);
+        let b = RoomId::new("https://test/b", 0);
+        let mut m = Map::default();
+        m.arrive(b, "B", [], Connection::Portal, false);
+        m.arrive(a, "Hall", [b], Connection::Portal, false);
+        m.rooms[1].layout = Some(RoomLayout {
+            bounds: [-8.0, -32.0, 8.0, 32.0],
+            ports: vec![Port {
+                anchor: "door".into(),
+                position: [-8.5, 8.0],
+                inward: [1.0, 0.0],
+                target: Some(b),
+                kind: Connection::Portal,
+            }],
+        });
+        let before = format!("{m:?}");
+        let scene = focus::scene(&m, MapMode::Expanded, 960, 640).expect("focus layout");
+        let current = scene.nodes.iter().find(|n| n.index == 1).unwrap();
+        let prior = scene.nodes.iter().find(|n| n.index == 0).unwrap();
+        let r = current.rect;
+        assert!(
+            ((r[2] - r[0]) / (r[3] - r[1]) - 0.25).abs() < 0.001,
+            "physical proportions, not square nodes"
+        );
+        assert!(
+            (r[2] - r[0]) * (r[3] - r[1])
+                > (prior.rect[2] - prior.rect[0]) * (prior.rect[3] - prior.rect[1])
+        );
+        assert_eq!(current.progress, [1, 1]);
+        assert_eq!(
+            scene.paths.len(),
+            1,
+            "a travelled pair must not be redrawn as an untravelled outbound link"
+        );
+        assert_eq!(scene.ports.len(), 1);
+        assert_eq!(scene.ports[0].point[0], r[0]);
+        assert!((scene.ports[0].point[1] - (r[1] + (r[3] - r[1]) * 0.625)).abs() < 0.01);
+        assert!(
+            scene
+                .paths
+                .iter()
+                .any(|p| p.points.first() == Some(&scene.ports[0].point)
+                    || p.points.last() == Some(&scene.ports[0].point)),
+            "traceable connection starts at the real door"
+        );
+        assert_eq!(
+            before,
+            format!("{m:?}"),
+            "focus never reshapes physical state"
+        );
+    }
+}
+
 struct Layout {
     x: f32,
     y: f32,
@@ -47,7 +198,31 @@ struct Layout {
 
 /// Map overlay in logical viewport pixels; scale stays the parent renderer's job.
 /// Hidden, empty or unfittable views draw nothing rather than covering controls.
+pub fn overlay_at(
+    map: &Map,
+    mode: MapMode,
+    pose: &crate::Pose,
+    width: u32,
+    height: u32,
+) -> Vec<Vertex> {
+    if map
+        .current
+        .and_then(|i| map.rooms.get(i))
+        .is_some_and(|r| r.layout.is_some())
+    {
+        focus::overlay(map, mode, Some(pose.position), pose.yaw, width, height)
+    } else {
+        overlay(map, mode, pose.yaw, width, height)
+    }
+}
 pub fn overlay(map: &Map, mode: MapMode, yaw: f32, width: u32, height: u32) -> Vec<Vertex> {
+    if map
+        .current
+        .and_then(|i| map.rooms.get(i))
+        .is_some_and(|r| r.layout.is_some())
+    {
+        return focus::overlay(map, mode, None, yaw, width, height);
+    }
     if mode == MapMode::Hidden {
         return Vec::new();
     }
@@ -580,6 +755,7 @@ mod tests {
                     title: "Home".into(),
                     cell: [0, 0],
                     exits: vec![about],
+                    layout: None,
                     stale: false,
                 },
                 Room {
@@ -587,6 +763,7 @@ mod tests {
                     title: "About".into(),
                     cell: [1, 0],
                     exits: vec![home, unseen],
+                    layout: None,
                     stale: false,
                 },
             ],

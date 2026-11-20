@@ -1,7 +1,13 @@
 //! Commit-only map observation: no network, page retention or navigation authority.
 use super::*;
 use hair::exploration::{Connection, Map, RoomId};
-pub(super) fn observe(map: &mut Map, world: &World, kind: Connection, refresh: bool) {
+pub(super) fn observe(
+    map: &mut Map,
+    world: &World,
+    host: &hair::host_scene::HostScene,
+    kind: Connection,
+    refresh: bool,
+) {
     let Some(pocket) = &world.pocket else {
         return;
     };
@@ -30,4 +36,7 @@ pub(super) fn observe(map: &mut Map, world: &World, kind: Connection, refresh: b
         }
     }
     map.arrive(RoomId::new(address, window), title, exits, kind, refresh);
+    if let Some(index) = map.current {
+        map.rooms[index].layout = hair::exploration::RoomLayout::observe(host, world);
+    }
 }

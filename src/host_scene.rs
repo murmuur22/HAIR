@@ -124,18 +124,29 @@ impl HostScene {
         }
     }
     pub fn parse(text: &str) -> Result<Self> {
-        if text.len() > 32768 {
-            return Err("host scene exceeds 32768 bytes".into());
+        Self::parse_profile(text, false)
+    }
+    /// Only deterministic generated web rooms may use the larger bounded profile.
+    /// Authored/local host files remain restricted to versions 1 and 2.
+    pub(crate) fn parse_generated(text: &str) -> Result<Self> {
+        Self::parse_profile(text, true)
+    }
+    fn parse_profile(text: &str, generated: bool) -> Result<Self> {
+        if text.len() > if generated { 65536 } else { 32768 } {
+            return Err("host scene encoded byte budget exceeded".into());
         }
         let s: Self = toml::from_str(text).map_err(|e| format!("host scene TOML: {e}"))?;
+        if generated && s.version != 3 {
+            return Err("generated host requires internal version 3".into());
+        }
         if s.open_platform && s.version != 2 {
             return Err("open platform requires host scene version 2".into());
         }
-        let finite = |v: f32| v.is_finite() && v.abs() <= 16.0;
-        if !matches!(s.version, 1 | 2)
+        let finite = |v: f32| v.is_finite() && v.abs() <= if generated { 64.0 } else { 16.0 };
+        if !(matches!(s.version, 1 | 2) || (generated && s.version == 3))
             || s.name.is_empty()
             || s.name.len() > 80
-            || s.anchors.len() > 64
+            || s.anchors.len() > if generated { 80 } else { 64 }
             || s.geometry.len().saturating_add(s.overhead.len()) > 64
             || !s.room.iter().chain(s.spawn.iter()).all(|v| finite(*v))
             || !s.height.is_finite()
@@ -150,12 +161,12 @@ impl HostScene {
                 && size.iter().all(|v| v.is_finite() && *v > 0.0 && *v <= 8.0)
                 && at[1] >= 0.0
                 && at[1] + size[1] <= s.height
-                && (0..3).all(|i| at[i].abs() + size[i] <= 16.0)
+                && (0..3).all(|i| at[i].abs() + size[i] <= if generated { 64.0 } else { 16.0 })
         };
         let mut ids = HashSet::new();
         let mut roles = HashSet::new();
         for a in &s.anchors {
-            if s.version == 2 {
+            if matches!(s.version, 2 | 3) {
                 roles.insert(a.role.as_str());
             }
             if a.id.is_empty()
@@ -172,7 +183,7 @@ impl HostScene {
                         (a.role.as_str(), a.binding.as_str()),
                         ("document", "current-document") | ("portal", "selected-target")
                     ))
-                    || (s.version == 2
+                    || (matches!(s.version, 2 | 3)
                         && matches!(
                             (a.role.as_str(), a.binding.as_str()),
                             ("document", "explicit-page") | ("portal", "explicit-door")
@@ -218,7 +229,7 @@ impl HostScene {
                 "host overhead requires valid boxes, >=2.2m clearance and no anchor overlap".into(),
             );
         }
-        if s.version == 2 {
+        if matches!(s.version, 2 | 3) {
             let boxes: Vec<_> = s
                 .anchors
                 .iter()
@@ -236,7 +247,13 @@ impl HostScene {
             }
             for role in ["document", "portal", "decoration", "image"] {
                 let n = s.anchors.iter().filter(|a| a.role == role).count();
-                if n > if role == "image" { 1 } else { 16 } {
+                if n > if role == "image" {
+                    1
+                } else if generated && role == "portal" {
+                    67
+                } else {
+                    16
+                } {
                     return Err("explicit anchor role multiplicity exceeded".into());
                 }
             }
@@ -246,8 +263,11 @@ impl HostScene {
         Ok(s)
     }
     fn check_wall_apertures(&self) -> Result<()> {
-        if self.wall_apertures.len() > 3 || (!self.wall_apertures.is_empty() && self.version != 2) {
-            return Err("host wall apertures require version 2 and at most three openings".into());
+        let generated = self.version == 3;
+        if self.wall_apertures.len() > if generated { 64 } else { 3 }
+            || (!self.wall_apertures.is_empty() && !matches!(self.version, 2 | 3))
+        {
+            return Err("host wall apertures require version 2 and at most three openings (internal generated profile capped at 64)".into());
         }
         let [left, front, right, rear] = self.room;
         let mut walls = HashSet::new();
@@ -257,7 +277,7 @@ impl HostScene {
             let Some(anchor) = self.anchors.iter().find(|a| a.id == opening.anchor) else {
                 return Err("host wall aperture references an absent anchor".into());
             };
-            if !walls.insert(opening.wall)
+            if (!generated && !walls.insert(opening.wall))
                 || !anchors.insert(&opening.anchor)
                 || anchor.role != "portal"
                 || anchor.binding != "explicit-door"
@@ -297,8 +317,32 @@ impl HostScene {
             }
             total_width += opening.width;
         }
-        if total_width > 6.0 {
-            return Err("host wall aperture total opening width exceeds 6m budget".into());
+        if total_width > if generated { 108.0 } else { 6.0 } {
+            return Err("host wall aperture total opening width exceeds 6m budget (internal generated profile capped at 108m)".into());
+        }
+        if generated {
+            for wall in [Wall::Rear, Wall::Left, Wall::Right] {
+                let tangent = if wall == Wall::Rear { 0 } else { 2 };
+                let mut intervals: Vec<_> = self
+                    .wall_apertures
+                    .iter()
+                    .filter(|o| o.wall == wall)
+                    .map(|o| {
+                        let a = self.anchors.iter().find(|a| a.id == o.anchor).unwrap();
+                        [a.at[tangent] - o.width * 0.5, a.at[tangent] + o.width * 0.5]
+                    })
+                    .collect();
+                intervals.sort_by(|a, b| a[0].total_cmp(&b[0]));
+                let width: f32 = intervals.iter().map(|v| v[1] - v[0]).sum();
+                let span = if wall == Wall::Rear {
+                    right - left
+                } else {
+                    rear - front
+                };
+                if width > span * 0.75 || intervals.windows(2).any(|v| v[1][0] - v[0][1] < 0.59) {
+                    return Err("generated wall openings overlap, lack jamb clearance or exceed wall coverage".into());
+                }
+            }
         }
         Ok(())
     }
@@ -357,7 +401,7 @@ impl HostScene {
         let mut reached = vec![false; goals.len()];
         let mut arrived = vec![false; arrivals.len()];
         while let Some(c) = q.pop_front() {
-            if seen.len() > 17000 {
+            if seen.len() > if self.version == 3 { 32768 } else { 17000 } {
                 return Err("host scene connection work budget exceeded".into());
             }
             let p = [
@@ -420,6 +464,63 @@ impl HostScene {
     pub fn walls(&self) -> Vec<Geometry> {
         if self.open_platform {
             return Vec::new();
+        }
+        if self.version == 3 {
+            let mut base = self.clone();
+            base.version = 2;
+            base.wall_apertures.clear();
+            let mut out = Vec::new();
+            for (wall, slab) in [Wall::Rear, Wall::Left, Wall::Right]
+                .into_iter()
+                .zip(base.walls())
+            {
+                let tangent = if wall == Wall::Rear { 0 } else { 2 };
+                let mut openings: Vec<_> = self
+                    .wall_apertures
+                    .iter()
+                    .filter(|o| o.wall == wall)
+                    .collect();
+                openings.sort_by(|a, b| {
+                    let centre = |o: &WallAperture| {
+                        self.anchors
+                            .iter()
+                            .find(|x| x.id == o.anchor)
+                            .map_or(0.0, |x| x.at[tangent])
+                    };
+                    centre(a).total_cmp(&centre(b))
+                });
+                let mut cursor = slab.at[tangent] - slab.size[tangent] * 0.5;
+                let end = slab.at[tangent] + slab.size[tangent] * 0.5;
+                for opening in openings {
+                    let anchor = self
+                        .anchors
+                        .iter()
+                        .find(|a| a.id == opening.anchor)
+                        .expect("validated generated opening");
+                    let low = anchor.at[tangent] - opening.width * 0.5;
+                    let high = anchor.at[tangent] + opening.width * 0.5;
+                    if low > cursor {
+                        let mut jamb = slab.clone();
+                        jamb.at[tangent] = (cursor + low) * 0.5;
+                        jamb.size[tangent] = low - cursor;
+                        out.push(jamb);
+                    }
+                    let mut lintel = slab.clone();
+                    lintel.at[tangent] = anchor.at[tangent];
+                    lintel.at[1] = opening.height;
+                    lintel.size[tangent] = opening.width;
+                    lintel.size[1] = self.height - opening.height;
+                    out.push(lintel);
+                    cursor = high;
+                }
+                if end > cursor {
+                    let mut jamb = slab;
+                    jamb.at[tangent] = (cursor + end) * 0.5;
+                    jamb.size[tangent] = end - cursor;
+                    out.push(jamb);
+                }
+            }
+            return out;
         }
         let [x0, z0, x1, z1] = self.room;
         let slabs = [
@@ -523,4 +624,48 @@ fn inside(p: [f32; 2], b: [f32; 4]) -> bool {
 }
 fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
+}
+#[cfg(test)]
+mod generated_profile_contract {
+    use super::*;
+    fn dense() -> HostScene {
+        let html = (0..64)
+            .map(|i| format!("<a href='/target-{i}'>Link</a>"))
+            .collect::<String>();
+        crate::web::Page::html(
+            crate::web::Address::parse("https://test.example/").unwrap(),
+            html.as_bytes(),
+        )
+        .unwrap()
+        .generate()
+        .unwrap()
+        .host
+    }
+    #[test]
+    fn generated_profile_refuses_oversize_nonfinite_overlap_and_duplicate_openings() {
+        let good = dense();
+        let encode = |s: &HostScene| toml::to_string(s).unwrap();
+        assert_eq!(HostScene::parse_generated(&encode(&good)).unwrap(), good);
+        assert!(HostScene::parse(&encode(&good)).is_err());
+        let mut authored = good.clone();
+        authored.version = 2;
+        assert!(HostScene::parse(&encode(&authored)).is_err());
+        for mutation in 0..7 {
+            let mut bad = good.clone();
+            match mutation {
+                0 => bad.room[3] = 65.0,
+                1 => bad.anchors[0].at[0] = f32::NAN,
+                2 => bad.anchors[1].at = bad.anchors[0].at,
+                3 => bad.wall_apertures.push(bad.wall_apertures[0].clone()),
+                4 => bad.anchors[0].binding = "execute-script".into(),
+                5 => bad.spawn = [bad.room[2] + 1.0, 0.0],
+                _ => bad.anchors[0].size[0] = 9.0,
+            }
+            assert!(
+                HostScene::parse_generated(&encode(&bad)).is_err(),
+                "mutation {mutation}"
+            );
+        }
+        assert!(HostScene::parse_generated(&" ".repeat(65_537)).is_err());
+    }
 }

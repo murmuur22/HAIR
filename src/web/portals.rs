@@ -35,11 +35,10 @@ fn groups(world: &World) -> BTreeMap<String, Vec<Link>> {
         let Destination::External(raw) = &link.destination else {
             continue;
         };
-        let Ok(mut url) = reqwest::Url::parse(raw) else {
+        if reqwest::Url::parse(raw).is_err() {
             continue;
-        };
-        url.set_fragment(None);
-        out.entry(super::generate::anchor_id(url.as_str()))
+        }
+        out.entry(super::generate::anchor_id(raw))
             .or_default()
             .push(link);
     }
@@ -97,6 +96,9 @@ pub fn cycle(world: &mut World, anchor: &str, reverse: bool) -> bool {
     let Some(v) = view(world, anchor) else {
         return false;
     };
+    if v.count <= 1 {
+        return false;
+    }
     let links = groups(world).remove(anchor).unwrap();
     let i = if reverse {
         (v.index + v.count - 1) % v.count

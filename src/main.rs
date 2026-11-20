@@ -636,6 +636,7 @@ impl App {
         exploration_native::observe(
             &mut exploration,
             &world,
+            &themes[theme_index].host,
             hair::exploration::Connection::Portal,
             false,
         );

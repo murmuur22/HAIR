@@ -35,12 +35,78 @@ pub enum Connection {
     Portal,
     Passage,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct Port {
+    pub anchor: String,
+    pub position: [f32; 2],
+    pub inward: [f32; 2],
+    pub target: Option<RoomId>,
+    pub kind: Connection,
+}
+/// Privacy-bounded observation of committed physical geometry, not another
+/// placement algorithm. Presentation focus never changes this footprint.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoomLayout {
+    pub bounds: [f32; 4],
+    pub ports: Vec<Port>,
+}
+impl RoomLayout {
+    pub fn observe(host: &crate::host_scene::HostScene, world: &crate::World) -> Option<Self> {
+        let pocket = world.pocket.as_ref()?;
+        if host.version != 3 || !host.room.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let mut ports = Vec::new();
+        for anchor in host
+            .anchors
+            .iter()
+            .filter(|a| a.role == "portal" && a.binding == "explicit-door")
+            .take(68)
+        {
+            let (target, kind) =
+                if let Some(destination) = crate::web::door_destination(world, &anchor.id) {
+                    (Some(RoomId::new(&destination, 0)), Connection::Portal)
+                } else if anchor.id == "return-history" {
+                    (None, Connection::Portal)
+                } else if let Some((index, previous, next)) = pocket.room {
+                    match anchor.id.as_str() {
+                        "web-previous-window" if previous && index > 0 => (
+                            Some(RoomId::new(&world.current, index - 1)),
+                            Connection::Passage,
+                        ),
+                        "web-next-window" if next => (
+                            Some(RoomId::new(&world.current, index.checked_add(1)?)),
+                            Connection::Passage,
+                        ),
+                        _ => continue,
+                    }
+                } else {
+                    continue;
+                };
+            ports.push(Port {
+                anchor: anchor.id.clone(),
+                position: [anchor.at[0], anchor.at[2]],
+                inward: host.portal_inward(&anchor.id),
+                target,
+                kind,
+            });
+        }
+        if ports.len() > 67 {
+            return None;
+        }
+        Some(Self {
+            bounds: host.room,
+            ports,
+        })
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Room {
     pub id: RoomId,
     pub title: String,
     pub cell: [i32; 2],
     pub exits: Vec<RoomId>,
+    pub layout: Option<RoomLayout>,
     pub stale: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +183,7 @@ impl Map {
                 title: String::new(),
                 cell,
                 exits: Vec::new(),
+                layout: None,
                 stale: false,
             });
             self.rooms.len() - 1
@@ -135,7 +202,7 @@ impl Map {
             if observed.contains(&exit) {
                 continue;
             }
-            if observed.len() == 64 {
+            if observed.len() == 66 {
                 self.limited = true;
                 break;
             }
@@ -239,7 +306,7 @@ mod tests {
         assert!(m.current.is_none());
         assert!(m.rooms.iter().all(|r| r.title.chars().count() <= 96
             && !r.title.chars().any(char::is_control)
-            && r.exits.len() <= 64));
+            && r.exits.len() <= 66));
         assert!(m.recent.len() <= 32 && m.edges.len() <= 512);
         let cell = m.rooms[0].cell;
         m.arrive(

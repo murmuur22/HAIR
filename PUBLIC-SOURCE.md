@@ -8,4 +8,6 @@ Follow README.md for the release build. The ordinary suite includes qualificatio
 
 This is test-branch source, not a public binary release, notarization or distribution/legal clearance.
 
-The exploration map is session-only and schematic, not a physical floor plan or crawled site directory. M in web world cycles near/all/off; Shift+M toggles the optional link/history listing, reader M stays unchanged, and Tab remains doorway/reader-link selection. Only successfully entered page/windows become nodes. Map storage is capped independently of page caches; there is no saved browsing map or map-triggered acquisition.
+The exploration map is session-only: generated physical room bounds and door coordinates drive the focused outlines, while visited-node placement remains a disclosed portal graph rather than physical adjacency or a crawled directory. M in web world cycles near/all/off; Shift+M toggles the optional link/history listing, reader M stays unchanged, and Tab remains doorway/reader-link selection. Only successfully entered page/windows become nodes. Map storage is capped independently of page caches; there is no saved browsing map or map-triggered acquisition.
+
+This successor gives each distinct complete destination its own door, scales hallway length independently of reading width, restores held rooms on Back, and explicitly rebuilds changed rooms on F5 with safe-pose retention or entry relocation. Source gates do not establish native input or owner comfort. Wikipedia, website-image acquisition, floors and saved maps remain deferred.

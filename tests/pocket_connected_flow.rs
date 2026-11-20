@@ -116,7 +116,14 @@ fn additional_sections_do_not_rearrange_partition_or_existing_portals() {
     let b = pocket(
         "<h2>Mountain</h2>Stones<h2>Harbour</h2>Boats<h2>Orchard</h2>Apples<a href='/next'>Next</a>",
     );
-    assert_eq!(a.host.room, b.host.room);
+    assert!(
+        b.host.room[2] - b.host.room[0] > a.host.room[2] - a.host.room[0],
+        "reading sections independently add width"
+    );
+    assert_eq!(
+        a.host.room[3] - a.host.room[1],
+        b.host.room[3] - b.host.room[1]
+    );
     assert_eq!(a.host.spawn, b.host.spawn);
     assert_eq!(a.host.geometry, b.host.geometry);
     for anchor in a.host.anchors.iter().filter(|a| a.role == "portal") {

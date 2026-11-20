@@ -556,6 +556,7 @@ impl App {
             }
         }
         let mut removed_selections = 0;
+        let mut selected_door_moved = false;
         let mut reader_recovered = false;
         // F5 acquires a NEW response of the exact URL. A later room has no ordinal
         // authority in those bytes: explicitly reset to room 1, never rebind index N.
@@ -565,18 +566,13 @@ impl App {
                 .as_ref()
                 .and_then(|p| p.window.as_ref())
                 .is_some_and(|w| w.index() > 0);
+        let refresh_relocated = j.mode == Mode::Refresh
+            && !source_reset
+            && p.generated.host.blocked(self.pose.position);
         if j.mode == Mode::Refresh && !source_reset {
-            let old_host = &self.themes[self.theme_index].host;
             let host = &p.generated.host;
-            if p.generated.world.current != self.world.current
-                || host.room != old_host.room
-                || host.spawn != old_host.spawn
-                || host.height != old_host.height
-                || host.geometry != old_host.geometry
-                || host.overhead != old_host.overhead
-                || host.blocked(self.pose.position)
-            {
-                let reason = "refresh changed shared room or safe pose";
+            if p.generated.world.current != self.world.current {
+                let reason = "refresh changed source identity";
                 self.web_completion = FeedbackRecord::terminal(
                     FeedbackPhase::Failure,
                     &j.destination,
@@ -653,6 +649,21 @@ impl App {
             removed_selections = hair::web::portals::retain(&self.world, next);
             next.explicit_target = self.world.explicit_target.clone();
             hair::interaction::refresh(host, &self.pose, next);
+            selected_door_moved = self
+                .world
+                .explicit_target
+                .as_ref()
+                .or(self.world.interaction.as_ref())
+                .filter(|old| old.kind == hair::interaction::Kind::Enter)
+                .and_then(|old| old.destination.as_ref())
+                .is_some_and(|destination| {
+                    p.generated.doors.iter().any(|d| &d.resource == destination)
+                        && next
+                            .interaction
+                            .as_ref()
+                            .and_then(|t| t.destination.as_ref())
+                            != Some(destination)
+                });
         }
         // GPU material validation before committing page/history; pack decode was on the worker.
         if let Some(r) = &mut self.renderer
@@ -753,8 +764,17 @@ impl App {
         // Continuation drops the preceding scene/materials instead of pushing page history.
         if let Some(arrival) = &continuation {
             self.pose = arrival.pose;
-        } else if j.mode != Mode::Refresh || source_reset {
+        } else if j.mode != Mode::Refresh || source_reset || refresh_relocated {
             self.themes[self.theme_index].respawn(&mut self.pose);
+        }
+        if refresh_relocated {
+            self.world.explicit_target = None;
+            hair::interaction::refresh_with_windows(
+                &self.themes[self.theme_index].host,
+                &self.pose,
+                &mut self.world,
+                &web.window_doors,
+            );
         }
         if j.mode != Mode::Refresh || reader_recovered || source_reset {
             self.scroll = 0;
@@ -777,6 +797,12 @@ impl App {
         } else {
             "R return | F5 refresh | Tab/Shift+Tab doorway destinations | T pack".into()
         };
+        if selected_door_moved {
+            web.status = format!("Selected door moved; aim again | {}", web.status);
+        }
+        if refresh_relocated {
+            web.status = format!("Room layout changed; moved to safe entry | {}", web.status);
+        }
         println!(
             "WEB_ARRIVAL source={} history={} pack={}",
             self.world.current,
@@ -786,6 +812,7 @@ impl App {
         exploration_native::observe(
             std::sync::Arc::make_mut(&mut self.exploration),
             &self.world,
+            &self.themes[self.theme_index].host,
             if matches!(j.mode, Mode::Continuation(_)) {
                 hair::exploration::Connection::Passage
             } else {
@@ -871,6 +898,7 @@ impl App {
         exploration_native::observe(
             std::sync::Arc::make_mut(&mut self.exploration),
             &self.world,
+            &self.themes[self.theme_index].host,
             hair::exploration::Connection::Portal,
             false,
         );
