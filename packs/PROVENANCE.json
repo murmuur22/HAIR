@@ -1,0 +1,22 @@
+{
+  "source": "https://kenney.nl/assets/furniture-kit",
+  "pack": "Kenney Furniture Kit 2.0",
+  "license": "CC0",
+  "archive_sha256": "e67652d0932cee41683f74711c03d3e192a2af9979ef8e6b237711f5482d46b0",
+  "members": {
+    "Models/GLTF format/desk.glb": "0164fe828f028b321730fb8c74502e353583f751be74da1682d42fff7d3c5a42",
+    "Models/GLTF format/chairDesk.glb": "46406619186034cbe92b19b79a5f1a8e3f442a17a70a7524ef2c0ad0f35095c6",
+    "Models/GLTF format/computerScreen.glb": "5942cbad29a2d2b956619569926e81d50a4174403d592fece6556e57632dc643",
+    "Models/GLTF format/computerKeyboard.glb": "9d9135789de2120e9f41ce3f0a56dd1b15f40adcc7888739bb842a2d820da322",
+    "Models/GLTF format/computerMouse.glb": "d3ad1a923f0f7707ef367bb969eb94c9076e211c98c830ba52e133fadc5cdfc0",
+    "Models/GLTF format/wall.glb": "69273d5d623bddfce41d12d4e5eeb5621ea04f1edcbd8f35c00a60c2fd3258b7",
+    "Models/GLTF format/wallDoorway.glb": "a55be1da05aa80c74749d0c38bd093fa5e2b1eaf21cbc9a7c3a0e6fbcfbe38e2",
+    "Models/GLTF format/floorFull.glb": "99fc5df646d8dc605d6fe35001fe5b15bb7b269cc5c65f4f7793fbc76ff3d822",
+    "Models/GLTF format/lampSquareCeiling.glb": "57066be51583d83ae60071e8179af275189cb2911ecb9fc24953bb930c8bf118",
+    "Models/GLTF format/bookcaseOpen.glb": "750702218d68c062b15dfef6ab06a4014d1cfa8bd05f02e57c53b7e13bec157c",
+    "Models/GLTF format/bookcaseClosedDoors.glb": "ff33f535acdb1825c0e958a293642b39665adcae0b1317b650e83d2bb687f4e2",
+    "Models/GLTF format/bookcaseOpenLow.glb": "6d4d625faf977a2dbf155f1313cd32c6310e463114a1cd4c08cb9f80a5fb1d75",
+    "Models/GLTF format/books.glb": "b8dc56e5d29f6fc1f4727fccb1b9642627fee9942c48060a00034e98df02701c"
+  },
+  "note": "Archive/library is a provisional demonstration, not a selected permanent artistic direction."
+}

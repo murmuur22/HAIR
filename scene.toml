@@ -1,0 +1,15 @@
+version = 1
+grid = 0.5
+# Presentation bindings, separate from content graph and reusable asset pack.
+[[bindings]]
+page = "welcome"
+document_role = "desk"
+document = "welcome"
+portal_role = "portal"
+destination = "workshop"
+[[bindings]]
+page = "workshop"
+document_role = "desk"
+document = "workshop"
+portal_role = "portal"
+destination = "welcome"

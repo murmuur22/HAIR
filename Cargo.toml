@@ -1,0 +1,42 @@
+[package]
+name = "hair"
+version = "0.4.1"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Same pinned parser, with a narrowly vendored preallocation/input-boundary patch.
+html5ever = { version = "=0.40.1", path = "vendor-html5ever", default-features = false }
+reqwest = { version = "=0.12.24", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
+hickory-resolver = { version = "=0.24.4", default-features = false, features = ["system-config", "tokio-runtime"] }
+sha2 = "=0.10.9"
+tokio = { version = "=1.54.1", default-features = false, features = ["rt", "time", "net"] }
+libc = "=0.2.191"
+wgpu = "=30.0.1"
+winit = "=0.30.13"
+serde = { version = "=1.0.228", features = ["derive"] }
+toml = "=0.9.8"
+gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names"] }
+glam = "=0.30.9"
+bytemuck = { version = "=1.25.2", features = ["derive"] }
+pollster = "=0.4.0"
+png = "=0.18.0"
+jpeg-decoder = { version = "=0.3.2-hair.1", path = "vendor-jpeg-decoder", default-features = false, features = ["platform_independent"] }
+egui = { version = "=0.37.0", optional = true, default-features = false, features = ["default_fonts"] }
+egui-wgpu = { version = "=0.37.0", optional = true, default-features = false }
+egui-winit = { version = "=0.37.0", optional = true, default-features = false }
+
+[features]
+default = []
+workshop = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
+
+# Reuse cached winit-compatible bindings for the visitor's directory-only panel.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "=0.5.3" }
+objc2-app-kit = { version = "=0.2.2", default-features = false, features = ["std", "NSApplication", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSResponder", "NSWindow"] }
+objc2-foundation = { version = "=0.2.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL", "NSThread"] }
+
+[[bin]]
+name = "hair-workshop"
+path = "src/bin/hair-workshop.rs"
+required-features = ["workshop"]

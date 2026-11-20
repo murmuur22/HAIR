@@ -1,0 +1,51 @@
+version = 1
+[[assets]]
+role = "desk"
+file = "desk.glb"
+footprint = [3, 2]
+max_extent = 2.0
+[[assets]]
+role = "chair"
+file = "chairDesk.glb"
+footprint = [2, 2]
+max_extent = 2.0
+[[assets]]
+role = "screen"
+file = "computerScreen.glb"
+footprint = [2, 1]
+max_extent = 2.0
+[[assets]]
+role = "keyboard"
+file = "computerKeyboard.glb"
+footprint = [2, 1]
+max_extent = 2.0
+[[assets]]
+role = "mouse"
+file = "computerMouse.glb"
+footprint = [1, 1]
+max_extent = 2.0
+[[assets]]
+role = "door"
+file = "doorway.glb"
+footprint = [2, 1]
+max_extent = 2.0
+[[assets]]
+role = "wall"
+file = "wall.glb"
+footprint = [4, 1]
+max_extent = 2.0
+[[assets]]
+role = "portal"
+file = "wallDoorway.glb"
+footprint = [4, 1]
+max_extent = 2.0
+[[assets]]
+role = "floor"
+file = "floorFull.glb"
+footprint = [4, 4]
+max_extent = 2.0
+[[assets]]
+role = "lamp"
+file = "lampSquareCeiling.glb"
+footprint = [1, 1]
+max_extent = 2.0

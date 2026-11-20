@@ -1,0 +1,10 @@
+version = 1
+start = "welcome"
+[[pages]]
+id = "welcome"
+file = "welcome.md"
+next = "workshop"
+[[pages]]
+id = "workshop"
+file = "workshop.md"
+next = "welcome"

@@ -1,0 +1,26 @@
+version = 2
+name = "office"
+
+[[roles]]
+role = "document"
+file = "desk.glb"
+max_extent = 3.0
+scale = 2.0
+yaw_degrees = 0.0
+pivot = [0.0, 0.0, 0.0]
+
+[[roles]]
+role = "portal"
+file = "wallDoorway.glb"
+max_extent = 3.0
+scale = 2.0
+yaw_degrees = 0.0
+pivot = [0.0, 0.0, 0.0]
+
+[[roles]]
+role = "decoration"
+file = "chairDesk.glb"
+max_extent = 3.0
+scale = 2.0
+yaw_degrees = 0.0
+pivot = [0.0, 0.0, 0.0]

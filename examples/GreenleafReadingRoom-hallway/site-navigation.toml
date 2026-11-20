@@ -1,0 +1,13 @@
+version=1
+name="Greenleaf continuous suite"
+[[pages]]
+id="index.md"
+label="Entrance"
+[[pages]]
+id="hallway.md"
+label="Bent hallway"
+parent="index.md"
+[[pages]]
+id="reading.md"
+label="Wide reading room"
+parent="hallway.md"

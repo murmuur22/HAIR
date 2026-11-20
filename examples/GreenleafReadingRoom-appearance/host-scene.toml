@@ -1,0 +1,236 @@
+version=2
+name="Greenleaf spaces"
+entry_space="reading-room"
+entry_page="index.md"
+entry_arrival="from-notice"
+
+[[spaces]]
+id="reading-room"
+name="Reading room"
+pages=["index.md"]
+default_page="index.md"
+default_arrival="from-notice"
+[[spaces.arrivals]]
+id="from-notice"
+at=[-1.25, -1.9]
+yaw_degrees=180.0
+pitch_degrees=-7.0
+door="door-notice"
+[[spaces.arrivals]]
+id="from-workshop"
+at=[1.25, -1.9]
+yaw_degrees=180.0
+pitch_degrees=-7.0
+door="door-workshop"
+[[spaces.documents]]
+anchor="station"
+page="index.md"
+[[spaces.doors]]
+anchor="door-notice"
+space="notice-alcove"
+page="noticeboard.md"
+arrival="from-reading"
+[[spaces.doors]]
+anchor="door-workshop"
+space="workshop-room"
+page="workshop-notes.md"
+arrival="from-reading"
+[spaces.scene]
+version=2
+name="Reading room"
+room=[-3.25, -3, 3.25, 3]
+spawn=[-1.25, -1.9]
+height=3.0
+[[spaces.scene.anchors]]
+id="station"
+role="document"
+at=[0, 0.1, 0.1]
+size=[1.4, 1.0, 0.8]
+binding="explicit-page"
+[[spaces.scene.anchors]]
+id="notice-image"
+role="image"
+at=[0, 0.8, -3.15]
+size=[1, 1, 0.04]
+binding="current-image"
+[[spaces.scene.anchors]]
+id="door-notice"
+role="portal"
+at=[-1.25, 0.1, -3.18]
+size=[1.1, 2.45, 0.2]
+binding="explicit-door"
+[[spaces.scene.anchors]]
+id="door-workshop"
+role="portal"
+at=[1.25, 0.1, -3.18]
+size=[1.1, 2.45, 0.2]
+binding="explicit-door"
+[[spaces.scene.anchors]]
+id="display-decoration"
+role="decoration"
+at=[2.65, 0.55, 1.15]
+size=[0.6, 1.2, 0.6]
+binding="none"
+[[spaces.scene.geometry]]
+at=[-1.35, 0, 2.45]
+size=[0.25, 1.15, 0.45]
+[[spaces.scene.geometry]]
+at=[0.85, 0, 2.45]
+size=[0.25, 1.15, 0.45]
+[[spaces.scene.geometry]]
+at=[2.65, 0, 1.15]
+size=[0.65, 0.5, 1.8]
+
+[[spaces]]
+id="notice-alcove"
+name="Noticeboard collection alcove"
+pages=["noticeboard.md"]
+default_page="noticeboard.md"
+default_arrival="from-reading"
+[[spaces.arrivals]]
+id="from-reading"
+at=[-1.25, -2.9]
+yaw_degrees=180.0
+pitch_degrees=-7.0
+door="door-reading"
+[[spaces.arrivals]]
+id="from-workshop"
+at=[1.25, -2.9]
+yaw_degrees=180.0
+pitch_degrees=-7.0
+door="door-workshop"
+[[spaces.documents]]
+anchor="station"
+page="noticeboard.md"
+[[spaces.doors]]
+anchor="door-reading"
+space="reading-room"
+page="index.md"
+arrival="from-notice"
+[[spaces.doors]]
+anchor="door-workshop"
+space="workshop-room"
+page="workshop-notes.md"
+arrival="from-notice"
+[spaces.scene]
+version=2
+name="Noticeboard collection alcove"
+room=[-2.5, -4, 2.5, 2]
+spawn=[-1.25, -2.9]
+height=3.0
+[[spaces.scene.anchors]]
+id="station"
+role="document"
+at=[0, 0.1, 0.1]
+size=[1.4, 1.0, 0.8]
+binding="explicit-page"
+[[spaces.scene.anchors]]
+id="notice-image"
+role="image"
+at=[0, 0.8, -4.15]
+size=[1, 1, 0.04]
+binding="current-image"
+[[spaces.scene.anchors]]
+id="door-reading"
+role="portal"
+at=[-1.25, 0.1, -4.18]
+size=[1.1, 2.45, 0.2]
+binding="explicit-door"
+[[spaces.scene.anchors]]
+id="door-workshop"
+role="portal"
+at=[1.25, 0.1, -4.18]
+size=[1.1, 2.45, 0.2]
+binding="explicit-door"
+[[spaces.scene.anchors]]
+id="display-decoration"
+role="decoration"
+at=[-2, 1.95, -0.5]
+size=[0.35, 0.8, 0.6]
+binding="none"
+[[spaces.scene.geometry]]
+at=[-2, 0, -0.5]
+size=[0.4, 1.9, 2.4]
+[[spaces.scene.geometry]]
+at=[0, 0, -2.8]
+size=[1.3, 0.4, 0.7]
+[[spaces.scene.geometry]]
+at=[0, 0, -3.3]
+size=[0.7, 0.8, 0.5]
+
+[[spaces]]
+id="workshop-room"
+name="Workshop notes room"
+pages=["workshop-notes.md"]
+default_page="workshop-notes.md"
+default_arrival="from-notice"
+[[spaces.arrivals]]
+id="from-notice"
+at=[-1.25, -1.4]
+yaw_degrees=180.0
+pitch_degrees=-7.0
+door="door-notice"
+[[spaces.arrivals]]
+id="from-reading"
+at=[1.25, -1.4]
+yaw_degrees=180.0
+pitch_degrees=-7.0
+door="door-reading"
+[[spaces.documents]]
+anchor="station"
+page="workshop-notes.md"
+[[spaces.doors]]
+anchor="door-notice"
+space="notice-alcove"
+page="noticeboard.md"
+arrival="from-workshop"
+[[spaces.doors]]
+anchor="door-reading"
+space="reading-room"
+page="index.md"
+arrival="from-workshop"
+[spaces.scene]
+version=2
+name="Workshop notes room"
+room=[-4, -2.5, 4, 2.5]
+spawn=[-1.25, -1.4]
+height=3.0
+[[spaces.scene.anchors]]
+id="station"
+role="document"
+at=[0, 0.1, 0.1]
+size=[1.4, 1.0, 0.8]
+binding="explicit-page"
+[[spaces.scene.anchors]]
+id="notice-image"
+role="image"
+at=[0, 0.8, -2.65]
+size=[1, 1, 0.04]
+binding="current-image"
+[[spaces.scene.anchors]]
+id="door-notice"
+role="portal"
+at=[-1.25, 0.1, -2.68]
+size=[1.1, 2.45, 0.2]
+binding="explicit-door"
+[[spaces.scene.anchors]]
+id="door-reading"
+role="portal"
+at=[1.25, 0.1, -2.68]
+size=[1.1, 2.45, 0.2]
+binding="explicit-door"
+[[spaces.scene.anchors]]
+id="display-decoration"
+role="decoration"
+at=[2.7, 0.75, 0]
+size=[0.7, 1.1, 0.7]
+binding="none"
+[[spaces.scene.geometry]]
+at=[-2.7, 0, 0]
+size=[0.8, 0.7, 1.5]
+[[spaces.scene.geometry]]
+at=[2.7, 0, 0]
+size=[0.8, 0.7, 1.5]
+[[spaces.scene.geometry]]
+at=[0, 0, -1.9]
+size=[1.6, 0.35, 0.6]

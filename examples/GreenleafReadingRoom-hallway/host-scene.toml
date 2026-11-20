@@ -1,0 +1,121 @@
+# Original CC0 synthetic geometry. Existing host-v2; no floor-region extension.
+# One continuous place. Only door-entry is a teleport/reset; interior openings are walk-through.
+version=2
+name="Greenleaf continuous suite"
+entry_space="greenleaf-suite"
+entry_page="index.md"
+entry_arrival="entry"
+
+[[spaces]]
+id="greenleaf-suite"
+name="Greenleaf: entrance / bent hall / reading room"
+pages=["index.md", "hallway.md", "reading.md"]
+default_page="index.md"
+default_arrival="entry"
+[[spaces.arrivals]]
+id="entry"
+at=[0, -5.9]
+yaw_degrees=180.0
+pitch_degrees=-7.0
+door="door-entry"
+[[spaces.documents]]
+anchor="entrance-note"
+page="index.md"
+[[spaces.documents]]
+anchor="hallway-note"
+page="hallway.md"
+[[spaces.documents]]
+anchor="reading-note"
+page="reading.md"
+[[spaces.doors]]
+anchor="door-entry"
+space="greenleaf-suite"
+page="index.md"
+arrival="entry"
+[spaces.scene]
+version=2
+name="Greenleaf continuous suite"
+room=[-4, -7, 4, 6]
+spawn=[0, -5.9]
+height=3.0
+[[spaces.scene.anchors]]
+id="entrance-note"
+role="document"
+at=[-1.3, 0.1, -4.9]
+size=[0.5, 0.7, 0.5]
+binding="explicit-page"
+[[spaces.scene.anchors]]
+id="hallway-note"
+role="document"
+at=[3.5, 0.1, 2]
+size=[0.35, 0.65, 0.35]
+binding="explicit-page"
+[[spaces.scene.anchors]]
+id="reading-note"
+role="document"
+at=[-2, 0.1, 4.5]
+size=[0.9, 0.9, 0.6]
+binding="explicit-page"
+[[spaces.scene.anchors]]
+id="entry-image"
+role="image"
+at=[1.3, 0.8, -7.15]
+size=[0.8, 1, 0.04]
+binding="current-image"
+[[spaces.scene.anchors]]
+id="door-entry"
+role="portal"
+at=[0, 0.1, -7.18]
+size=[1.1, 2.45, 0.2]
+binding="explicit-door"
+[[spaces.scene.anchors]]
+id="reading-decoration"
+role="decoration"
+at=[-3.4, 0.1, 5.2]
+size=[0.4, 0.8, 0.4]
+binding="none"
+
+# Solid fill defines compact entrance (4 x 4), not traversable hidden regions.
+[[spaces.scene.geometry]]
+at=[-3, 0, -5]
+size=[2, 3, 4]
+[[spaces.scene.geometry]]
+at=[3, 0, -5]
+size=[2, 3, 4]
+# Left of the north-going hall; east upper solid forces the right-angle bend.
+[[spaces.scene.geometry]]
+at=[-2.5, 0, 0]
+size=[3, 3, 6]
+[[spaces.scene.geometry]]
+at=[2.5, 0, -1]
+size=[3, 3, 4]
+# Entrance opening, 1.30m clear visual width; fixed jambs + lintel, no leaf.
+[[spaces.scene.geometry]]
+at=[-0.825, 0, -3]
+size=[0.35, 3, 0.2]
+[[spaces.scene.geometry]]
+at=[0.825, 0, -3]
+size=[0.35, 3, 0.2]
+[[spaces.scene.overhead]]
+at=[0, 2.5, -3]
+size=[1.3, 0.5, 0.2]
+# Wide reading room 8 x 3; opening at east end requires walking the bend.
+[[spaces.scene.geometry]]
+at=[-1.075, 0, 3]
+size=[5.85, 3, 0.2]
+[[spaces.scene.geometry]]
+at=[3.575, 0, 3]
+size=[0.85, 3, 0.2]
+[[spaces.scene.overhead]]
+at=[2.5, 2.5, 3]
+size=[1.3, 0.5, 0.2]
+# Close the otherwise open south edge except the existing portal reset aperture.
+[[spaces.scene.geometry]]
+at=[-1.3, 0, -7]
+size=[1.4, 3, 0.1]
+[[spaces.scene.geometry]]
+at=[1.3, 0, -7]
+size=[1.4, 3, 0.1]
+[[spaces.scene.overhead]]
+at=[0, 2.6, -7]
+size=[1.2, 0.4, 0.1]

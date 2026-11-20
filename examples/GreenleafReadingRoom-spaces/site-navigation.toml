@@ -1,0 +1,13 @@
+version=1
+name="Greenleaf"
+[[pages]]
+id="index.md"
+label="Reading room"
+[[pages]]
+id="noticeboard.md"
+label="Noticeboard alcove"
+parent="index.md"
+[[pages]]
+id="workshop-notes.md"
+label="Workshop notes room"
+parent="index.md"

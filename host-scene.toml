@@ -1,0 +1,34 @@
+version = 1
+name = "Shared demo room"
+room = [-3.75, -3.75, 3.75, 3.75]
+spawn = [0.0, 3.0]
+height = 3.0
+geometry = []
+
+[[anchors]]
+id = "main-document"
+role = "document"
+at = [0.0, 0.1, 0.3]
+size = [1.8, 1.4, 1.2]
+binding = "current-document"
+
+[[anchors]]
+id = "main-link"
+role = "portal"
+at = [0.0, 0.1, -4.0]
+size = [1.4, 2.5, 0.2]
+binding = "selected-target"
+
+[[anchors]]
+id = "main-image"
+role = "image"
+at = [-1.8, 0.7, -3.9]
+size = [1.5, 1.0, 0.04]
+binding = "current-image"
+
+[[anchors]]
+id = "side-object"
+role = "decoration"
+at = [2.5, 0.1, -1.5]
+size = [1.0, 1.8, 1.0]
+binding = "none"
