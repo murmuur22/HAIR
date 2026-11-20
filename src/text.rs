@@ -1,4 +1,5 @@
 use crate::assets::Vertex;
+pub mod exploration_map;
 // Informational 2x bitmap sidebar; current-centred window, no navigation actions.
 const TREE_SCALE: f32 = 2.0;
 const TREE_TOP: f32 = 76.0;
@@ -139,10 +140,11 @@ fn tree_overlay_above(world: &crate::World, width: u32, height: u32, bottom: f32
             TREE_HEADER_HEIGHT + count as f32 * TREE_ROW_PITCH,
             [0.012, 0.012, 0.012],
         );
-        let suffix = if world.tree_collapsed {
-            " M SHOW"
-        } else {
-            " M HIDE"
+        let suffix = match (world.reading, world.tree_collapsed) {
+            (false, true) => " SHIFT M SHOW",
+            (false, false) => " SHIFT M HIDE",
+            (true, true) => " M SHOW",
+            (true, false) => " M HIDE",
         };
         p.text(
             18.0,
@@ -594,7 +596,7 @@ pub fn overlay_with_web_feedback(
         } else if world.reading {
             "LOCAL MARKDOWN | ASCII READER"
         } else if web {
-            "WASD | CLICK LOOK | T PACK | M WEB MAP | ~ SOURCE: READ DOCUMENT FOR FULL ADDRESS"
+            "WASD | CLICK LOOK | T PACK | M MAP | SHIFT M LINKS | ~ READ FOR FULL ADDRESS"
         } else {
             "WASD | CLICK LOOK | E INTERACT | TAB/SHIFT TAB TARGET | T THEME"
         },

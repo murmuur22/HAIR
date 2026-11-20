@@ -6,6 +6,12 @@ mod app_continuation;
 mod cache_loading;
 #[path = "web_context_app_tests.rs"]
 mod context_app;
+#[path = "exploration_app_tests.rs"]
+mod exploration_app;
+#[path = "exploration_capture_tests.rs"]
+mod exploration_capture;
+#[path = "exploration_composition_tests.rs"]
+mod exploration_composition;
 #[path = "web_grouped_tests.rs"]
 mod grouped;
 #[path = "web_landmark_tests.rs"]

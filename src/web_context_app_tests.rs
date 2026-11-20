@@ -12,10 +12,12 @@ fn panel_collapse_trail_and_visited_survive_follow_back_and_menu() {
     let mut a = app();
     let first = a.world.current.clone();
     let collapsed = a.world.tree_collapsed;
+    a.key(KeyCode::ShiftLeft, true, false).unwrap();
     tap(&mut a, KeyCode::KeyM);
+    a.key(KeyCode::ShiftLeft, false, false).unwrap();
     assert_eq!(
         a.world.tree_collapsed, !collapsed,
-        "M toggles the web panel"
+        "Shift M toggles the optional web panel"
     );
     let expanded = a.world.tree_collapsed;
     a.world.reading = true;

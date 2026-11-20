@@ -73,6 +73,18 @@ fn actual_next_previous_no_fetch_and_reciprocal_arrival() {
         ("web-previous-window", "Link0", "web-next-window"),
     ] {
         go(&mut a, door);
+        let window = a.world.pocket.as_ref().unwrap().room.unwrap().0;
+        let current = a.exploration.current.unwrap();
+        assert_eq!(
+            a.exploration.rooms[current].id,
+            hair::exploration::RoomId::new(BOARD, window)
+        );
+        assert!(
+            a.exploration
+                .edges
+                .iter()
+                .any(|e| e.kind == hair::exploration::Connection::Passage)
+        );
         assert_eq!(a.world.reader_links()[0].label, first);
         assert_eq!(a.world.current, BOARD);
         assert!(Arc::ptr_eq(&held, &source(&a)));
@@ -133,9 +145,14 @@ fn pending_r_discards_even_completed_continuation_without_popping_page_history()
     let pack = a.themes[a.theme_index].source.clone();
     aim(&mut a, "web-next-window");
     let pose = a.pose;
+    let map = a.exploration.clone();
     input(&mut a, KeyCode::KeyE);
     assert!(a.web.as_ref().unwrap().pending.is_some());
     input(&mut a, KeyCode::KeyR);
+    assert!(
+        Arc::ptr_eq(&map, &a.exploration),
+        "cancel must not publish a map observation"
+    );
     assert_eq!(a.web.as_ref().unwrap().history.len(), 1);
     finish(&mut a);
     assert!(a.web.as_ref().unwrap().status.contains("Cancelled"));
@@ -193,5 +210,13 @@ fn refresh_nonfirst_room_fetches_exact_url_and_explicitly_resets_source() {
     assert_eq!(a.world.reader_links()[0].label, "Link0");
     assert!(!Arc::ptr_eq(&held, &source(&a)));
     assert!(a.web.as_ref().unwrap().status.contains("reset"));
+    let page = hair::exploration::RoomId::new(BOARD, 0);
+    assert_eq!(a.exploration.rooms[a.exploration.current.unwrap()].id, page);
+    assert!(
+        a.exploration
+            .rooms
+            .iter()
+            .any(|r| r.id.page == page.page && r.id.window == 1 && r.stale)
+    );
     assert!(a.web.as_ref().unwrap().history.is_empty());
 }

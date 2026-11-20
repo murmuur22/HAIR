@@ -783,6 +783,16 @@ impl App {
             web.history.len(),
             self.themes[self.theme_index].name
         );
+        exploration_native::observe(
+            std::sync::Arc::make_mut(&mut self.exploration),
+            &self.world,
+            if matches!(j.mode, Mode::Continuation(_)) {
+                hair::exploration::Connection::Passage
+            } else {
+                hair::exploration::Connection::Portal
+            },
+            j.mode == Mode::Refresh,
+        );
         self.release();
         if let Some(r) = &mut self.renderer {
             if let Some(arrival) = &continuation {
@@ -858,6 +868,12 @@ impl App {
         }
         web.status =
             "Returned from local history; exact held window restored; F5 resets source".into();
+        exploration_native::observe(
+            std::sync::Arc::make_mut(&mut self.exploration),
+            &self.world,
+            hair::exploration::Connection::Portal,
+            false,
+        );
         self.release();
         if let Some(r) = &mut self.renderer {
             r.set_scene(&self.themes[self.theme_index].vertices_for(&self.world));

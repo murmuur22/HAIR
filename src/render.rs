@@ -58,6 +58,10 @@ pub struct Renderer {
     pub ui_scale: u16,
     /// Open presentation menu, drawn last over every other screen-space layer.
     pub menu: Option<crate::presentation::Menu>,
+    pub exploration: Option<(
+        std::sync::Arc<crate::exploration::Map>,
+        crate::exploration::MapMode,
+    )>,
     pub pack_feedback: String,
     /// Literal input, displayed error and rows scrolled up from the cursor tail.
     pub address_entry: Option<(String, Option<String>, usize)>,
@@ -314,6 +318,7 @@ impl Renderer {
             size,
             ui_scale: 100,
             menu: None,
+            exploration: None,
             pack_feedback: String::new(),
             address_entry: None,
             web_feedback_active: false,
@@ -692,6 +697,20 @@ impl Renderer {
                 }
             })
             .unwrap_or_default();
+        if let Some((map, mode)) = &self.exploration {
+            // Yield the whole map, without changing its retained mode or state.
+            // Feedback replaces the portal panel, so only a visible panel owns space.
+            let disclosure_owns_space = world.is_some_and(|world| {
+                (!self.web_feedback_active
+                    && !crate::text::portal_overlay(world, ui_w, ui_h).is_empty())
+                    || (*mode == crate::exploration::MapMode::Expanded && !world.tree_collapsed)
+            });
+            if !disclosure_owns_space {
+                ui.extend(crate::text::exploration_map::overlay(
+                    map, *mode, pose.yaw, ui_w, ui_h,
+                ));
+            }
+        }
         // Reader and transient address entry own their controls; global status
         // must not split the reader footer or compete with entry recovery help.
         if world.is_some_and(|world| !world.reading) && self.address_entry.is_none() {

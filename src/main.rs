@@ -140,7 +140,7 @@ fn run() -> Result<()> {
     };
     if args.first().is_some_and(|s| s == "--help") {
         println!(
-            "Reader scrolling: Up/Down scroll one row and repeat while held (native key repeat; after focus loss press again). Mouse wheel scrolls 3 rows per notch; trackpad pixels accumulate smoothly; both clamp to the content and are ignored outside an open reader, in the paused menu, address entry, chooser and image viewer. Web reader keeps <pre> code blocks exactly (indentation, blank lines, case, punctuation) with passive colouring for Python, Rust, JavaScript/TypeScript, C/C++, shell, JSON and HTML/XML; other languages stay plain. Code rows show '|' at a source line start and '>' on soft-wrapped continuation rows; the text itself is never rewritten. M toggles the web map (WEB LINKS/HISTORY): '<' visitor history (R), '=' same-page held-response rooms, '>' current page, '*' visited and '-' unvisited links, '^' other origin; no crawl or preload. The rear-wall Return door is the same typed history return as R and names the previous page when one exists."
+            "Reader scrolling: Up/Down scroll one row and repeat while held (native key repeat; after focus loss press again). Mouse wheel scrolls 3 rows per notch; trackpad pixels accumulate smoothly; both clamp to the content and are ignored outside an open reader, in the paused menu, address entry, chooser and image viewer. Web reader keeps <pre> code blocks exactly (indentation, blank lines, case, punctuation) with passive colouring for Python, Rust, JavaScript/TypeScript, C/C++, shell, JSON and HTML/XML; other languages stay plain. Code rows show '|' at a source line start and '>' on soft-wrapped continuation rows; the text itself is never rewritten. In the world, M cycles compact/expanded/hidden session exploration; Shift+M toggles optional WEB LINKS/HISTORY; reader M stays the listing. The map yields to actionable door disclosure, and the expanded map yields to an opened listing. WEB LINKS/HISTORY: '<' visitor history (R), '=' same-page held-response rooms, '>' current page, '*' visited and '-' unvisited links, '^' other origin; no crawl or preload. The rear-wall Return door is the same typed history return as R and names the previous page when one exists."
         );
         println!(
             "Web feedback: green/teal Loading… reflects real pending work; R cancels. Red failure swirl lasts at most two seconds without delaying restoration; reason persists. F8 toggles exact destination/error details in the world; Up/Down scroll. Reader/address retain their controls: Escape closes that context before F8 (and before R while typing). HAIR_STATIC_WEB_FEEDBACK=1 freezes the swirl; no audio, strobe or success wait. Feedback replaces only the selected-portal preview while visible; it is attempt-owned, not tied to a mutable door slot."
@@ -552,6 +552,7 @@ mod reader_scroll_tests;
 #[cfg(test)]
 mod sprint_tests;
 
+mod exploration_native;
 struct App {
     audio: folder_native::audio::Controller,
     images: folder_native::image::Runtime,
@@ -562,6 +563,8 @@ struct App {
     chooser_pending: bool,
     chooser_active: bool,
     web: Option<web_native::Runtime>,
+    exploration: std::sync::Arc<hair::exploration::Map>,
+    map_mode: hair::exploration::MapMode,
     web_completion: web_native::FeedbackRecord,
     web_details: bool,
     web_detail_scroll: usize,
@@ -629,6 +632,13 @@ impl App {
                 .expect("validated entry")
                 .1;
         }
+        let mut exploration = hair::exploration::Map::default();
+        exploration_native::observe(
+            &mut exploration,
+            &world,
+            hair::exploration::Connection::Portal,
+            false,
+        );
         Self {
             audio: Default::default(),
             images: Default::default(),
@@ -639,6 +649,8 @@ impl App {
             chooser_pending: false,
             chooser_active: false,
             web: None,
+            exploration: std::sync::Arc::new(exploration),
+            map_mode: Default::default(),
             web_completion: Default::default(),
             web_details: false,
             web_detail_scroll: 0,
@@ -877,6 +889,12 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             renderer.ui_scale = self.ui_scale;
             renderer.menu = self.menu;
+            renderer.exploration = (self.web.is_some()
+                && self.world.pocket.is_some()
+                && !self.world.reading
+                && self.address.is_none()
+                && self.menu.is_none())
+            .then(|| (self.exploration.clone(), self.map_mode));
             renderer.set_web_feedback(&visual, context_owned);
             renderer.viewer_visible = image_visible;
             renderer.address_entry = self.address.as_ref().map(|s| {
@@ -1178,7 +1196,15 @@ impl App {
                 self.tree_held = false;
             } else if self.focused && !repeat && !self.tree_held {
                 self.tree_held = true;
-                self.world.tree_collapsed = !self.world.tree_collapsed;
+                if self.web.is_some()
+                    && self.world.pocket.is_some()
+                    && !self.world.reading
+                    && !self.shifts.iter().any(|held| *held)
+                {
+                    self.map_mode.cycle();
+                } else {
+                    self.world.tree_collapsed = !self.world.tree_collapsed;
+                }
             }
             return Ok(false);
         }

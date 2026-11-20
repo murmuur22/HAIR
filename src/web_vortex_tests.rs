@@ -171,7 +171,19 @@ fn vortex_disclosure_scroll_does_not_rebind_destination_or_consume_movement_and_
         .unwrap();
     assert!(a.input.forward);
     let collapsed = a.world.tree_collapsed;
+    let mode = a.map_mode;
     tap(&mut a, KeyCode::KeyM);
+    assert_ne!(
+        a.map_mode, mode,
+        "attempt details must not consume world-map M"
+    );
+    assert_eq!(
+        a.world.tree_collapsed, collapsed,
+        "M no longer toggles optional links"
+    );
+    a.key(KeyCode::ShiftLeft, true, false).unwrap();
+    tap(&mut a, KeyCode::KeyM);
+    a.key(KeyCode::ShiftLeft, false, false).unwrap();
     assert_ne!(a.world.tree_collapsed, collapsed);
     tap(&mut a, KeyCode::KeyR);
     finish(&mut a);

@@ -1,4 +1,5 @@
 // Domain behavior remains independent of windows and GPU.
+pub mod exploration;
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 pub type Result<T> = std::result::Result<T, String>;
