@@ -160,7 +160,7 @@ fn same_literal(actual: &[Vertex], text: &str) {
         );
     }
 }
-fn parts(app: &App, snapshot: &Snapshot, scene: &[Vertex], display: &str) -> [Vec<Vertex>; 3] {
+fn parts(app: &App, snapshot: &Snapshot, scene: &[Vertex], display: &str) -> [Vec<Vertex>; 2] {
     let mut unbound = shadow(app, snapshot);
     unbound.folder_view.as_mut().unwrap().bindings.clear();
     let labels: Vec<_> = difference(scene, &app.themes[0].vertices_for(&unbound))
@@ -189,8 +189,11 @@ fn parts(app: &App, snapshot: &Snapshot, scene: &[Vertex], display: &str) -> [Ve
         .flatten()
         .copied()
         .collect();
-    assert!(!status.is_empty(), "image status must remain present");
-    [filename, kind, status]
+    assert!(
+        status.is_empty(),
+        "class image replaces the duplicate status cuboid; public I metadata remains checked"
+    );
+    [filename, kind]
 }
 fn source_plane(app: &App, texture: &Arc<Texture>) -> Vec<Vertex> {
     let theme = &app.themes[0];
@@ -207,9 +210,8 @@ fn source_plane(app: &App, texture: &Arc<Texture>) -> Vec<Vertex> {
         .iter()
         .find(|a| a.id == "entry-0")
         .unwrap();
-    // Authorized PNG/JPEG content-only inset. Center/depth/UV construction below unchanged.
-    let usable_height = a.size[1] - 0.06_f32.min(a.size[1] * 0.5) * 2.0;
-    let scale = (a.size[0] / texture.width as f32).min(usable_height / texture.height as f32);
+    let usable_height = 0.85_f32;
+    let scale = (0.8 / texture.width as f32).min(usable_height / texture.height as f32);
     if [texture.width, texture.height] == [96, 64] {
         let old_scale = (a.size[0] / texture.width as f32).min(a.size[1] / texture.height as f32);
         assert_eq!(
@@ -220,8 +222,8 @@ fn source_plane(app: &App, texture: &Arc<Texture>) -> Vec<Vertex> {
     }
     let (w, h) = (texture.width as f32 * scale, texture.height as f32 * scale);
     let left = a.at[0] - w * 0.5;
-    let top = a.at[1] + (a.size[1] + h) * 0.5;
-    let z = a.at[2] + a.size[2] * 0.45;
+    let top = a.at[1] + a.size[1] + 0.12 + h;
+    let z = a.at[2];
     let vertex = |x, y, uv| Vertex {
         position: [x, y, z],
         color: [1.0; 3],
@@ -334,7 +336,7 @@ fn overlap(subject: &[DVec2], clip: &[DVec2]) -> f64 {
 fn projection(
     app: &App,
     source: &[Vertex],
-    parts: &[Vec<Vertex>; 3],
+    parts: &[Vec<Vertex>; 2],
     size: [u32; 2],
     stage: &str,
     failures: &mut Vec<String>,
@@ -403,6 +405,11 @@ fn projection(
                 .collect()
         })
         .collect();
+    let extent = |polys: &[Vec<DVec2>]| {
+        polys.iter().flatten().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p|
+            [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)])
+    };
+    println!("IMAGE_PLACARD_PROJECTION {stage}/{size:?} source={:?} filename={:?} type={:?}", extent(&source), extent(&projected_parts[0]), extent(&projected_parts[1]));
     for (index, (role, mesh)) in ["filename", "type", "status"]
         .into_iter()
         .zip(parts)
@@ -428,6 +435,8 @@ fn projection(
             .iter()
             .any(|p| ui.iter().any(|(u, _)| overlap(p, u) > AREA_EPS))
         {
+            let blockers: Vec<_> = ui.iter().filter(|(u, _)| polygons.iter().any(|p| overlap(p, u) > AREA_EPS)).map(|(u, _)| u.clone()).collect();
+            println!("IMAGE_PLACARD_BLOCKERS {stage}/{size:?} {role} region={:?}", extent(&blockers));
             failures.push(format!(
                 "{stage}/{size:?}: IMAGE_METADATA_OPAQUE_UI_OVERLAP role={role}"
             ));
@@ -567,6 +576,9 @@ fn inspect(app: &mut App, snapshot: &Snapshot, needles: &[&str]) {
 
 #[test]
 fn local_image_placard_is_visible_at_ordinary_approach() {
+    placard_trace(None);
+}
+fn placard_trace(metal: Option<&Path>) {
     // Tiny local oracle controls, not a new broad test pile.
     let square = [DVec2::ZERO, DVec2::X, DVec2::ONE, DVec2::Y];
     assert_eq!(overlap(&square, &square.map(|p| p + DVec2::X)), 0.0);
@@ -614,7 +626,22 @@ fn local_image_placard_is_visible_at_ordinary_approach() {
         assert!(app.renderer.is_none());
         app.complete_folder(Ok(Some(selected.clone()))).unwrap();
         if app.world.tree_collapsed {
-            tap(&mut app, KeyCode::KeyM); // actual input: qualify the opaque expanded tree
+            // Actual Settings control, not M (which owns the map).
+            for code in [
+                KeyCode::Escape,
+                KeyCode::ArrowDown,
+                KeyCode::Enter,
+                KeyCode::Enter, // Settings > Player Settings
+                KeyCode::ArrowDown,
+                KeyCode::ArrowDown,
+                KeyCode::ArrowDown,
+                KeyCode::Enter,
+                KeyCode::Escape,
+                KeyCode::Escape,
+                KeyCode::Escape,
+            ] {
+                tap(&mut app, code);
+            }
         }
         assert!(!app.world.tree_collapsed);
         let snapshot = hair::local_explorer::snapshot(&selected).unwrap();
@@ -635,11 +662,22 @@ fn local_image_placard_is_visible_at_ordinary_approach() {
         );
         let inward = host.portal_inward(&a.id);
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0] + 1.05 * inward[0], a.at[2] + 1.05 * inward[1]],
             yaw: (-inward[0]).atan2(inward[1]),
-            pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / 1.05).atan(),
+            pitch: ((a.at[1]
+                + a.size[1]
+                + 0.12
+                + (0.8 / dimensions[0] as f32).min(0.85 / dimensions[1] as f32)
+                    * dimensions[1] as f32
+                    * 0.5
+                - 1.65)
+                / 1.05)
+                .atan(),
         };
-        assert!(!host.blocked(app.pose.position) && host.blocked([a.at[0], a.at[2]]));
+        assert!(host.file_anchors.contains(&a.id));
+        assert!(!host.blocked(app.pose.position) && !host.blocked([a.at[0], a.at[2]]));
         host.check_routes(&[app.pose.position]).unwrap();
         app.world.explicit_target = None;
         refresh(&mut app);
@@ -653,6 +691,7 @@ fn local_image_placard_is_visible_at_ordinary_approach() {
         fs::rename(&selected, &held).unwrap();
         assert!(!selected.exists());
         let mut stable_remainder = None;
+        if metal.is_some() { metal_witness::attach(&mut app); }
         for stage in ["before-e", "escape-return", "i-return"] {
             let texture = published(&mut app);
             assert_eq!([texture.width, texture.height], dimensions);
@@ -732,6 +771,9 @@ fn local_image_placard_is_visible_at_ordinary_approach() {
                     &format!("{format}/{stage}"),
                     &mut failures,
                 );
+                if let Some(output) = metal {
+                    metal_witness::observe(&mut app, output, &format!("{format}-{stage}-{}x{}", size[0], size[1]), size, &decorations);
+                }
             }
             println!(
                 "IMAGE_PLACARD_OBSERVED {format}/{stage} pose={:?} name={display} cumulative_visibility_failures={}",
@@ -812,3 +854,6 @@ fn local_image_placard_is_visible_at_ordinary_approach() {
         failures.join("\n")
     );
 }
+
+#[path = "owner_r1b_caption_metal_tests.rs"]
+mod metal_witness;

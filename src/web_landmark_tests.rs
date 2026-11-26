@@ -178,6 +178,8 @@ fn closed_reader_refresh_keeps_surviving_aimed_selection_and_e_destination() {
         .find(|x| x.id == d.anchor)
         .unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0], -2.8],
         yaw: 0.0,
         pitch: -0.2,
@@ -224,6 +226,8 @@ fn rendered_fixed_landmarks_reskin_refresh() {
     let dir = PathBuf::from(std::env::var_os("HAIR_STABLE_CAPTURE_DIR").unwrap());
     let mut a = landmark_app();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 3.5],
         yaw: 0.0,
         pitch: -0.15,

@@ -79,6 +79,185 @@ pub struct Cache {
     pub(super) path: PathBuf,
     held: File,
 }
+/// One bounded application-owned preference record, using the same held-directory
+/// no-follow/write-sync-rename primitives as acquisition, not room/layout storage.
+/// No cache generations, inventory records or publisher paths are involved.
+#[derive(Debug)]
+#[must_use = "Reconcile activated preferences even when durability is uncertain"]
+pub enum PreferenceWrite {
+    NotCommitted(String),
+    Committed { sync_warning: Option<String> },
+    Unknown(String),
+}
+pub struct PreferenceFile {
+    path: PathBuf,
+    held: File,
+    writer: std::sync::Mutex<()>,
+}
+impl PreferenceFile {
+    pub fn open(parent: &Path) -> Result<Self> {
+        let canonical = parent.canonicalize().map_err(|e| e.to_string())?;
+        if canonical != parent || !parent.is_absolute() {
+            return Err("Preference parent alias refused".into());
+        }
+        let parent_fd = OpenOptions::new()
+            .read(true)
+            .custom_flags(DIR)
+            .open(parent)
+            .map_err(|e| e.to_string())?;
+        let leaf = c"HAIR";
+        if unsafe { libc::mkdirat(parent_fd.as_raw_fd(), leaf.as_ptr(), 0o700) } != 0
+            && std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST)
+        {
+            return Err(err());
+        }
+        let held = open_at(&parent_fd, "HAIR", DIR)?;
+        let meta = held.metadata().map_err(|e| e.to_string())?;
+        if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o022 != 0 {
+            return Err("Preference directory must be owned and not group/world writable".into());
+        }
+        let out = Self {
+            path: parent.join("HAIR"),
+            held,
+            writer: std::sync::Mutex::new(()),
+        };
+        same(&out.held, &out.path)?;
+        Ok(out)
+    }
+    pub fn read(&self) -> Result<Option<Vec<u8>>> {
+        use std::io::Read;
+        same(&self.held, &self.path)?;
+        let leaf = c"player-settings.toml";
+        let fd = unsafe {
+            libc::openat(
+                self.held.as_raw_fd(),
+                leaf.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            let e = std::io::Error::last_os_error();
+            return if e.raw_os_error() == Some(libc::ENOENT) {
+                Ok(None)
+            } else {
+                Err(e.to_string())
+            };
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        let meta = file.metadata().map_err(|e| e.to_string())?;
+        if !meta.is_file()
+            || meta.uid() != unsafe { libc::geteuid() }
+            || meta.nlink() != 1
+            || meta.len() > 4096
+        {
+            return Err("Preference record must be one owned regular file <=4096 bytes".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(4097)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 4096 {
+            return Err("Preference record grew beyond 4096 bytes".into());
+        }
+        Ok(Some(bytes))
+    }
+    pub fn write(&self, bytes: &[u8]) -> Result<()> {
+        match self.write_outcome(bytes) {
+            PreferenceWrite::Committed { sync_warning: None } => Ok(()),
+            PreferenceWrite::Committed { sync_warning: Some(e) } => Err(format!("Preference activated; directory sync warning: {e}")),
+            PreferenceWrite::NotCommitted(e) => Err(e),
+            PreferenceWrite::Unknown(e) => Err(format!("Preference activation UNKNOWN: {e}")),
+        }
+    }
+    pub fn write_outcome(&self, bytes: &[u8]) -> PreferenceWrite {
+        self.write_observed(bytes, |_| Ok(()))
+    }
+    fn write_observed(&self, bytes: &[u8], mut checkpoint: impl FnMut(u8) -> Result<()>) -> PreferenceWrite {
+        match self.write_inner(bytes, &mut checkpoint) {
+            Ok(outcome) => outcome,
+            Err(e) => PreferenceWrite::NotCommitted(e),
+        }
+    }
+    fn write_inner(&self, bytes: &[u8], checkpoint: &mut impl FnMut(u8) -> Result<()>) -> Result<PreferenceWrite> {
+        if bytes.len() > 4096 {
+            return Err("Preference record exceeds 4096 bytes".into());
+        }
+        // flock excludes independently opened stores/processes; a shared store's
+        // descriptor would otherwise allow two threads to reenter the same lock.
+        let _writer = self
+            .writer
+            .try_lock()
+            .map_err(|_| "Preference writer busy")?;
+        if unsafe { libc::flock(self.held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err("Preference writer busy".into());
+        }
+        let result = (|| {
+            self.read()?; // Refuse symlinks, hardlinks, devices and oversized targets.
+            // Never inspect/remove a crash-left or foreign pending path. Each save
+            // gets one fresh exclusive leaf; collision is a bounded safe refusal.
+            // Time + process + serial also avoids stale names after PID reuse.
+            let temp = format!(
+                "player-settings-{}-{}-{}.pending",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?
+                    .as_nanos(),
+                SERIAL.fetch_add(1, Ordering::Relaxed)
+            );
+            let from = name(&temp)?;
+            let mut file = open_at(
+                &self.held,
+                &temp,
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )?;
+            let result = file
+                .write_all(bytes)
+                .and_then(|_| file.sync_all())
+                .map_err(|e| e.to_string())
+                .and_then(|_| same(&self.held, &self.path));
+            if let Err(e) = result {
+                let _ = unlink(&self.held, &temp, false);
+                return Err(e);
+            }
+            if let Err(e) = checkpoint(0) {
+                let _ = unlink(&self.held, &temp, false);
+                return Err(e);
+            }
+            if unsafe {
+                libc::renameat(
+                    self.held.as_raw_fd(),
+                    from.as_ptr(),
+                    self.held.as_raw_fd(),
+                    c"player-settings.toml".as_ptr(),
+                )
+            } != 0
+            {
+                // Rename error does not establish which target is active. Keep
+                // staging evidence; never call this a safe blind retry.
+                return Ok(PreferenceWrite::Unknown(err()));
+            }
+            let warning = checkpoint(1)
+                .and_then(|_| self.held.sync_all().map_err(|e| e.to_string())).err();
+            let observed = (|| {
+                checkpoint(2)?;
+                let named = open_at(&self.held, "player-settings.toml", libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)?;
+                let a = file.metadata().map_err(|e| e.to_string())?;
+                let b = named.metadata().map_err(|e| e.to_string())?;
+                if a.dev() != b.dev() || a.ino() != b.ino() || self.read()?.as_deref() != Some(bytes) {
+                    return Err("Activated preference target changed; preserve evidence".into());
+                }
+                Ok(())
+            })();
+            if let Err(e) = observed { return Ok(PreferenceWrite::Unknown(e)); }
+            Ok(PreferenceWrite::Committed { sync_warning: warning })
+        })();
+        unsafe {
+            libc::flock(self.held.as_raw_fd(), libc::LOCK_UN);
+        }
+        result
+    }
+}
 impl Cache {
     /// Parent must exist, be absolute and contain no symlink aliases. Caller supplies
     /// every selected site, pack directory and application Resources boundary.
@@ -307,6 +486,165 @@ mod tests {
         ));
         std::fs::create_dir(&p).unwrap();
         p.canonicalize().unwrap()
+    }
+    #[test]
+    fn r10_preference_storage_bounds_and_link_failures_preserve_targets() {
+        let parent = base("r10-preference-safety");
+        let owned = parent.join("HAIR");
+        let file = PreferenceFile::open(&parent).unwrap();
+        assert_eq!(file.read().unwrap(), None);
+        file.write(b"version = 1\n").unwrap();
+        assert_eq!(file.read().unwrap().unwrap(), b"version = 1\n");
+        assert!(file.write(&vec![0; 4097]).is_err());
+        assert_eq!(file.read().unwrap().unwrap(), b"version = 1\n");
+        let path = owned.join("player-settings.toml");
+        std::fs::remove_file(&path).unwrap();
+        let owner = parent.join("owner.txt");
+        std::fs::write(&owner, b"do not touch").unwrap();
+        std::os::unix::fs::symlink(&owner, &path).unwrap();
+        assert!(file.read().is_err());
+        assert!(file.write(b"changed").is_err());
+        assert_eq!(std::fs::read(&owner).unwrap(), b"do not touch");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::hard_link(&owner, &path).unwrap();
+        assert!(file.write(b"changed").is_err());
+        assert_eq!(std::fs::read(&owner).unwrap(), b"do not touch");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, vec![0; 4097]).unwrap();
+        assert!(file.read().is_err());
+        assert!(file.write(b"changed").is_err());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 4097);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(file.read().is_err());
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+    #[test]
+    fn r11_preference_crash_leftovers_and_foreign_pending_are_never_touched() {
+        let parent = base("r11-preference-leftovers");
+        let file = PreferenceFile::open(&parent).unwrap();
+        let pending = parent.join("HAIR/player-settings.pending");
+        let owner = parent.join("foreign.txt");
+        std::fs::write(&owner, b"foreign bytes").unwrap();
+        for kind in ["crash", "symlink", "hardlink", "directory", "oversized"] {
+            match kind {
+                "crash" => std::fs::write(&pending, b"incomplete crash bytes").unwrap(),
+                "symlink" => std::os::unix::fs::symlink(&owner, &pending).unwrap(),
+                "hardlink" => std::fs::hard_link(&owner, &pending).unwrap(),
+                "directory" => std::fs::create_dir(&pending).unwrap(),
+                "oversized" => std::fs::write(&pending, vec![b'x'; 4097]).unwrap(),
+                _ => unreachable!(),
+            }
+            let before = std::fs::symlink_metadata(&pending).unwrap();
+            file.write(kind.as_bytes()).unwrap();
+            let after = std::fs::symlink_metadata(&pending).unwrap();
+            assert_eq!(
+                (before.ino(), before.nlink(), before.len()),
+                (after.ino(), after.nlink(), after.len())
+            );
+            assert_eq!(std::fs::read(&owner).unwrap(), b"foreign bytes");
+            assert_eq!(file.read().unwrap().unwrap(), kind.as_bytes());
+            file.write(b"later successful save").unwrap();
+            assert_eq!(file.read().unwrap().unwrap(), b"later successful save");
+            if kind == "directory" {
+                std::fs::remove_dir(&pending).unwrap();
+            } else {
+                if kind == "crash" {
+                    assert_eq!(std::fs::read(&pending).unwrap(), b"incomplete crash bytes");
+                }
+                std::fs::remove_file(&pending).unwrap();
+            }
+        }
+        assert_eq!(
+            std::fs::read_dir(parent.join("HAIR")).unwrap().count(),
+            1,
+            "successful saves leave only active record"
+        );
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+    #[test]
+    fn r11_preference_concurrent_writer_refuses_without_changes_then_recovers() {
+        let parent = base("r11-preference-concurrent");
+        let file = PreferenceFile::open(&parent).unwrap();
+        file.write(b"last good").unwrap();
+        // A separately opened descriptor has the same directory lock identity.
+        let other = PreferenceFile::open(&parent).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(file.held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let other = std::thread::spawn(move || {
+            assert_eq!(
+                other.write(b"contending save").unwrap_err(),
+                "Preference writer busy"
+            );
+            assert_eq!(other.read().unwrap().unwrap(), b"last good");
+            other
+        })
+        .join()
+        .unwrap();
+        assert_eq!(std::fs::read_dir(parent.join("HAIR")).unwrap().count(), 1);
+        assert_eq!(
+            unsafe { libc::flock(file.held.as_raw_fd(), libc::LOCK_UN) },
+            0
+        );
+        other.write(b"after writer exit").unwrap();
+        file.write(b"next save").unwrap();
+        assert_eq!(other.read().unwrap().unwrap(), b"next save");
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+    #[test]
+    fn r11_preference_shared_handle_exclusion_and_held_root_rebind_preserve_bytes() {
+        let parent = base("r11-preference-shared-rebind");
+        let file = PreferenceFile::open(&parent).unwrap();
+        file.write(b"last good").unwrap();
+        let guard = file.writer.lock().unwrap();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                assert_eq!(
+                    file.write(b"same handle contender").unwrap_err(),
+                    "Preference writer busy"
+                );
+            })
+            .join()
+            .unwrap();
+        });
+        drop(guard);
+        assert_eq!(file.read().unwrap().unwrap(), b"last good");
+        let original = parent.join("held-original");
+        std::fs::rename(parent.join("HAIR"), &original).unwrap();
+        std::fs::create_dir(parent.join("HAIR")).unwrap();
+        let rebound = parent.join("HAIR/player-settings.toml");
+        std::fs::write(&rebound, b"rebound bytes").unwrap();
+        assert!(file.read().is_err());
+        assert!(file.write(b"must refuse").is_err());
+        assert_eq!(std::fs::read(&rebound).unwrap(), b"rebound bytes");
+        assert_eq!(
+            std::fs::read(original.join("player-settings.toml")).unwrap(),
+            b"last good"
+        );
+        std::fs::remove_file(rebound).unwrap();
+        std::fs::remove_dir(parent.join("HAIR")).unwrap();
+        std::fs::rename(original, parent.join("HAIR")).unwrap();
+        let boundary = vec![b'x'; 4096];
+        file.write(&boundary).unwrap();
+        assert_eq!(file.read().unwrap().unwrap(), boundary);
+        assert!(file.write(&vec![b'y'; 4097]).is_err());
+        assert_eq!(file.read().unwrap().unwrap(), boundary);
+        file.write(b"later save").unwrap();
+        assert_eq!(file.read().unwrap().unwrap(), b"later save");
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+    #[test]
+    fn r10_preference_directory_alias_is_refused() {
+        let parent = base("r10-preference-alias");
+        let target = parent.join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&target, parent.join("HAIR")).unwrap();
+        assert!(PreferenceFile::open(&parent).is_err());
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        std::fs::remove_dir_all(parent).unwrap();
     }
     #[test]
     fn cache_refuses_overlap_symlink_and_ambiguous_names_before_writes() {

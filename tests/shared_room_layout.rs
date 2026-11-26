@@ -48,6 +48,8 @@ fn every_door_is_aimable_at_its_actual_side_and_restores_its_exact_target() {
         let inward = g.host.portal_inward(&d.anchor);
         sides.insert([inward[0] as i32, inward[1] as i32]);
         let pose = hair::Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0] + inward[0], a.at[2] + inward[1]],
             yaw: (-inward[0]).atan2(inward[1]),
             pitch: -0.2,
@@ -92,6 +94,8 @@ fn internal_generated_profile_is_not_accepted_as_an_authored_host() {
 fn tab_moves_between_nearby_individual_doors_instead_of_reselecting_one() {
     let mut g = generated(2, "");
     let pose = hair::Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [-3.6, g.host.room[1] + 0.5],
         yaw: 0.0,
         pitch: -0.2,
@@ -151,6 +155,8 @@ fn maximum_link_load_and_reading_objects_keep_both_continuations_reachable() {
         let a = g.host.anchors.iter().find(|a| a.id == d.anchor).unwrap();
         let inward = g.host.portal_inward(&d.anchor);
         let pose = hair::Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0] + inward[0], a.at[2] + inward[1]],
             yaw: (-inward[0]).atan2(inward[1]),
             pitch: -0.2,

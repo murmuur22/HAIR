@@ -203,6 +203,8 @@ fn ordinary_t_preserves_explicit_play_intent_and_held_audio_generation() {
     let anchor = host.anchors.iter().find(|a| a.id == id).unwrap();
     let inward = host.portal_inward(&id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [
             anchor.at[0] + 1.05 * inward[0],
             anchor.at[2] + 1.05 * inward[1],

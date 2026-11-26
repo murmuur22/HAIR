@@ -1,4 +1,105 @@
 use super::*;
+#[path = "exploration_live_tour_tests.rs"]
+mod live_tour;
+
+/// Explicit owner-requested live-page capture; never selected by the offline suite.
+#[test]
+#[ignore = "live HTTPS + serialized Metal; explicit HAIR_LEARNX_CAPTURE_DIR"]
+fn live_learnx_homepage_route_map_capture() {
+    let tap = |a: &mut App, key: KeyCode| {
+        a.key(key, true, false).unwrap();
+        a.key(key, false, false).unwrap();
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let output_root = PathBuf::from(
+        std::env::var_os("HAIR_LEARNX_CAPTURE_DIR").expect("explicit capture directory"),
+    );
+    assert!(output_root.is_dir());
+    let p = web_native::prepare(
+        Address::parse("https://learnxinyminutes.com/").unwrap(),
+        &[root.join("packs/office.toml")],
+        hair::web::fetch,
+        &Default::default(),
+    )
+    .expect("real live homepage acquisition and room preparation");
+    println!(
+        "LIVE_HOMEPAGE url={} title={:?} links={} completeness={:?}",
+        p.generated.page.address.original,
+        p.generated.page.title,
+        p.generated.page.links.len(),
+        p.generated.page.completeness
+    );
+    let mut a = App::new(root, p.themes, 0, p.generated.world, false);
+    a.web = Some(web_native::Runtime::new(
+        p.generated.doors,
+        hair::web::fetch,
+    ));
+    assert_eq!(
+        a.exploration.rooms.len(),
+        1,
+        "do not invent visited rooms from outgoing links"
+    );
+    let index = a.exploration.current.unwrap();
+    println!(
+        "LIVE_MAP rooms={} exits={} ports={} bounds={:?}",
+        a.exploration.rooms.len(),
+        a.exploration.rooms[index].exits.len(),
+        a.exploration.rooms[index]
+            .layout
+            .as_ref()
+            .unwrap()
+            .ports
+            .len(),
+        a.themes[0].host.room
+    );
+    let instance = render::instance();
+    let adapter = pollster::block_on(render::adapter(&instance, None)).unwrap();
+    assert_eq!(adapter.get_info().backend, wgpu::Backend::Metal);
+    let mut r = pollster::block_on(render::Renderer::new(
+        &adapter,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        [1280, 960],
+        &a.themes[0].vertices_for(&a.world),
+    ))
+    .unwrap();
+    r.set_theme_appearance(&a.themes[0]).unwrap();
+    a.renderer = Some(r);
+    // Same documented observer pose as earlier physical-room captures; not a native input claim.
+    a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
+        position: [0.6, -1.5],
+        yaw: std::f32::consts::PI,
+        pitch: -0.2,
+    };
+    a.world.explicit_target = None;
+    a.world.interaction = None;
+    a.ui_scale = 100;
+    tap(&mut a, KeyCode::KeyM);
+    assert_eq!(a.map_mode, hair::exploration::MapMode::Expanded);
+    for (label, size) in [
+        ("homepage-fullscreen", [1280, 960]),
+        ("homepage-fullscreen-minimum", [640, 480]),
+    ] {
+        let dir = output_root.join(label);
+        std::fs::create_dir(&dir).unwrap();
+        let out = resources::smoke_output(&a.root, &dir).unwrap();
+        a.update_hud();
+        let r = a.renderer.as_mut().unwrap();
+        r.resize(size);
+        r.capture(&out, "office.png", &a.pose, &a.world).unwrap();
+    }
+    tap(&mut a, KeyCode::KeyM);
+    assert_eq!(a.map_mode, hair::exploration::MapMode::Compact);
+    let dir = output_root.join("homepage-minimap");
+    std::fs::create_dir(&dir).unwrap();
+    let out = resources::smoke_output(&a.root, &dir).unwrap();
+    a.update_hud();
+    let r = a.renderer.as_mut().unwrap();
+    r.resize([1280, 960]);
+    r.capture(&out, "office.png", &a.pose, &a.world).unwrap();
+    r.wait().unwrap();
+}
 
 fn physical_fixture(
     address: Address,
@@ -57,6 +158,8 @@ fn physical_focus_graph_captures_branch_loop_and_hallway() {
     r.set_theme_appearance(&a.themes[0]).unwrap();
     a.renderer = Some(r);
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.6, -1.5],
         yaw: std::f32::consts::PI,
         pitch: -0.2,
@@ -97,6 +200,8 @@ fn actual_map_renderer_receives_navigation_and_captures_modes() {
     }
     a.return_web().unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 3.0],
         yaw: 0.0,
         pitch: 0.0,

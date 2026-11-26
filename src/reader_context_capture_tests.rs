@@ -137,6 +137,8 @@ fn reader_context_scale_code_map_and_return_door_captures() {
     // generic 20-colour guard rightly refuses it. Assert the actual aim from an
     // oblique near pose, then capture an overview that includes furniture.
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [door[0] + 0.6, 3.0],
         yaw: std::f32::consts::PI + 0.45,
         pitch: -0.2,
@@ -182,6 +184,8 @@ fn aim_link_door(a: &App) -> (Pose, hair::interaction::Target) {
         for z in [-2.8, -2.4, -2.0] {
             for dx in [0.0, -0.3, 0.3] {
                 let pose = Pose {
+                    eye_offset: 1.65,
+                    feet_y: 0.0,
                     position: [link.at[0] + dx, z],
                     yaw: 0.0,
                     pitch: -0.2,
@@ -266,6 +270,8 @@ fn address_and_aimed_door_scale_matrix_captures() {
         // Overview pose with room furniture; the asserted target stays the
         // aimed-door context drawn by the panel (labelled as overview).
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [near.position[0], 1.5],
             yaw: 0.0,
             pitch: -0.15,

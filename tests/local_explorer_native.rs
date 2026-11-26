@@ -94,10 +94,24 @@ fn unchanged_native_executable_can_explore_a_folder_via_its_real_adapter_and_ren
     );
     let text = String::from_utf8_lossy(&o.stdout);
     let err = String::from_utf8_lossy(&o.stderr);
+    for line in text
+        .lines()
+        .filter(|line| line.starts_with("INVENTORY_POINTER_") || line.starts_with("GPU_ADAPTER="))
+    {
+        println!("{line}");
+    }
     assert!(
         o.status.success(),
         "native folder proof should execute, status={:?}, stdout={text}, stderr={err}",
         o.status.code()
+    );
+    assert!(
+        text.contains("INVENTORY_POINTER_APP_OK"),
+        "actual collected-item pointer/key/focus adapter and changed Metal PNG must pass: {text}"
+    );
+    assert!(
+        text.contains("DIRECTORY_MAP_CONFIRMED_TRAVEL_OK"),
+        "packaged proof must exercise explicit map confirmation: {text}"
     );
     assert!(
         text.contains("LOCAL_FOLDER_FLOW_OK"),

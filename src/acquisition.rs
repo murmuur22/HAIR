@@ -198,7 +198,7 @@ mod transaction;
 pub use transaction::{Acquirer, ActivatedSite, LocalSelection};
 pub use transport::Cancellation;
 mod cache;
-pub use cache::Cache;
+pub use cache::{Cache, PreferenceFile, PreferenceWrite};
 pub(crate) mod transport;
 #[cfg(test)]
 mod transport_tests;

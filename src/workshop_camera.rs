@@ -11,6 +11,8 @@ impl Default for InspectionCamera {
     fn default() -> Self {
         Self {
             pose: crate::Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: [0.0, 3.5],
                 yaw: 0.0,
                 pitch: -0.2,

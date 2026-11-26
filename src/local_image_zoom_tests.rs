@@ -97,6 +97,8 @@ fn aim(app: &mut App, id: &str) {
     let a = host.anchors.iter().find(|a| a.id == id).unwrap();
     let inward = host.portal_inward(id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [a.at[0] + 1.05 * inward[0], a.at[2] + 1.05 * inward[1]],
         yaw: (-inward[0]).atan2(inward[1]),
         pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / 1.05).atan(),

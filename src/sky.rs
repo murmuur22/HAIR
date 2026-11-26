@@ -1,6 +1,6 @@
 //! Appearance-only static backgrounds, held separately from world materials.
 use crate::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 
 mod adaptation;
@@ -9,7 +9,7 @@ pub use adaptation::{PanoramaFit, PanoramaOptions, adapt_png};
 mod adaptation_tests;
 
 /// Unknown kinds and fields refuse; explicit skies require appearance v3.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SkySpec {
     Colour { rgb: [f64; 3] },

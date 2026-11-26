@@ -1,4 +1,4 @@
-version = 2
+version = 3
 name = "archive"
 
 [[roles]]
@@ -24,3 +24,35 @@ max_extent = 3.0
 scale = 2.0
 yaw_degrees = 0.0
 pivot = [0.0, 0.0, 0.0]
+
+[[decorations.assets]]
+id = "archive-closed"
+file = "bookcaseClosedDoors.glb"
+max_extent = 3.0
+scale = 1.0
+yaw_degrees = 0.0
+pivot = [0.0, 0.0, 0.0]
+
+[[decorations.assets]]
+id = "archive-open"
+file = "bookcaseOpen.glb"
+max_extent = 3.0
+scale = 1.0
+yaw_degrees = 0.0
+pivot = [0.0, 0.0, 0.0]
+
+[[decorations.entries]]
+id = "closed-bookcase"
+tag = "hair.storage.closed-bookcase"
+asset = "archive-closed"
+name = "Closed bookcase"
+[decorations.entries.defaults]
+collision = true
+
+[[decorations.entries]]
+id = "open-bookcase"
+tag = "hair.storage.open-bookcase"
+asset = "archive-open"
+name = "Open bookcase"
+[decorations.entries.defaults]
+collision = true

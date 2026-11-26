@@ -45,6 +45,8 @@ fn actual_locomotion_crosses_passage_both_directions_and_walls_stop_it_in_both_p
         .unwrap();
         assert_eq!(theme.host, g.host);
         let mut pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: g.host.spawn,
             yaw: 0.0,
             pitch: 0.0,

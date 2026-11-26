@@ -1,6 +1,10 @@
-//! Bounded safety preparation, not executed by this writer.
+//! Bounded safety regressions and authentic native qualification.
 //! Real Explorer/ReaderFile -> sole worker -> ordinary scheduler polling.
-//! Native fixture tests are explicitly ignored; source assertions are NOT runtime proof.
+//! On macOS the nonignored authentic_bounded_loader test REQUIRES the genuine
+//! SHA-pinned HAIR_VIDEO_STILL_FIXTURE; missing/wrong input is a setup failure,
+//! never a skip or qualification pass. Two additional authentic native adverses
+//! remain explicitly ignored and require separate opt-in qualification runs.
+//! Source assertions are supplemental, NOT native runtime proof.
 use super::*;
 use crate::local_model_fallback_tests::fixture;
 use fixture::owned::Fixture;
@@ -500,10 +504,9 @@ fn native_post_join_fail_closed_wiring_is_source_only_not_deterministic_runtime_
 fn authentic_input() -> Vec<u8> {
     use sha2::{Digest, Sha256};
     use std::{io::Read, os::unix::fs::MetadataExt, path::PathBuf};
-    let path = PathBuf::from(
-        std::env::var_os("HAIR_VIDEO_STILL_FIXTURE")
-            .expect("SETUP: explicit authentic MP4 required for ignored native qualification"),
-    );
+    let path = PathBuf::from(std::env::var_os("HAIR_VIDEO_STILL_FIXTURE").expect(
+        "SETUP: genuine MP4 required for native qualification (including nonignored loader test)",
+    ));
     assert!(path.is_absolute(), "SETUP: absolute fixture path");
     let mut file = fs::OpenOptions::new()
         .read(true)
@@ -553,6 +556,36 @@ fn authentic_input() -> Vec<u8> {
         "SETUP: authentic fixture identity mismatch"
     );
     bytes
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn authentic_bounded_loader_reaches_first_frame_without_request_cap_refusal() {
+    let bytes = authentic_input();
+    let mut slot = crate::folder_native::video_still::Slot::default();
+    let texture = slot.decode(&bytes).expect(
+        "genuine tiny MP4 must decode within unchanged held-loader request/delivery limits",
+    );
+    assert_eq!([texture.width, texture.height], [160, 96]);
+    let (pixels, rest) = texture.rgba.as_chunks::<4>();
+    assert!(rest.is_empty() && pixels.iter().all(|p| p[3] == 255));
+    for (x, y, rgb) in [
+        (24, 18, [220_u8, 40, 40]),
+        (100, 18, [40, 200, 60]),
+        (24, 70, [40, 70, 220]),
+        (100, 70, [230, 200, 40]),
+    ] {
+        assert!(
+            pixels[y * 160 + x][..3]
+                .iter()
+                .zip(rgb)
+                .all(|(a, b)| a.abs_diff(b) <= 28)
+        );
+    }
+    assert!(
+        !slot.occupied(),
+        "normal decode must observe tracked reclamation"
+    );
 }
 
 #[cfg(target_os = "macos")]

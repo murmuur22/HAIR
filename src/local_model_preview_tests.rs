@@ -114,6 +114,68 @@ fn published_scene(app: &mut App, color: [f32; 3]) -> Vec<Vertex> {
         std::thread::sleep(Duration::from_millis(2));
     }
 }
+pub(super) fn reference_floating(vertices: &[Vertex], a: &hair::host_scene::Anchor) -> Vec<Vertex> {
+    // Independent declared item envelope and bottom pivot; never call product fitting.
+    let lo: [f32; 3] = std::array::from_fn(|i| {
+        vertices
+            .iter()
+            .map(|v| v.position[i])
+            .fold(f32::INFINITY, f32::min)
+    });
+    let hi: [f32; 3] = std::array::from_fn(|i| {
+        vertices
+            .iter()
+            .map(|v| v.position[i])
+            .fold(f32::NEG_INFINITY, f32::max)
+    });
+    let size = [0.8, 0.85, 0.28];
+    let scale = (0..3)
+        .filter(|&i| hi[i] - lo[i] > 0.000001)
+        .map(|i| size[i] / (hi[i] - lo[i]))
+        .fold(f32::INFINITY, f32::min);
+    assert!(scale.is_finite() && scale > 0.0);
+    vertices
+        .iter()
+        .map(|v| Vertex {
+            position: [
+                a.at[0] + (v.position[0] - (lo[0] + hi[0]) * 0.5) * scale,
+                a.at[1] + a.size[1] + 0.12 + (v.position[1] - lo[1]) * scale,
+                a.at[2] + (v.position[2] - (lo[2] + hi[2]) * 0.5) * scale,
+            ],
+            ..*v
+        })
+        .collect()
+}
+pub(super) fn reference_placeholder(
+    theme: &hair::theme::Theme,
+    a: &hair::host_scene::Anchor,
+    name: &std::ffi::OsStr,
+) -> Vec<Vertex> {
+    let model = hair::file_items::Catalog::builtin()
+        .unwrap()
+        .representation(name);
+    let vertices = model
+        .vertices
+        .iter()
+        .map(|v| Vertex {
+            texture: if v.texture == 0 {
+                0
+            } else {
+                let texture = &model.textures[(v.texture & 0x7fff_ffff) as usize - 1];
+                let slot = theme
+                    .textures
+                    .iter()
+                    .position(|t| Arc::ptr_eq(t, texture))
+                    .expect("class texture admitted in folder namespace")
+                    as u32
+                    + 1;
+                slot | (v.texture & 0x8000_0000)
+            },
+            ..*v
+        })
+        .collect::<Vec<_>>();
+    reference_floating(&vertices, a)
+}
 fn fitted_mesh(scene: &[Vertex], model: &Model, a: &hair::host_scene::Anchor) {
     let color = model.vertices[0].color;
     let mut remaining: Vec<_> = scene.iter().filter(|v| landmark(v, color)).collect();
@@ -122,14 +184,20 @@ fn fitted_mesh(scene: &[Vertex], model: &Model, a: &hair::host_scene::Anchor) {
         12,
         "actual tetrahedron, not a flat image quad"
     );
-    let center = [a.at[0], a.at[1] + a.size[1] * 0.5, a.at[2]];
+    let size = [0.8, 0.85, 0.28];
     let extent: [f32; 3] = std::array::from_fn(|i| model.max[i] - model.min[i]);
     let scale = (0..3)
-        .map(|i| a.size[i] / extent[i])
+        .filter(|&i| extent[i] > 0.000001)
+        .map(|i| size[i] / extent[i])
         .fold(f32::INFINITY, f32::min);
-    // Fixture deliberately makes Z limiting: fitting X/Y alone must overflow Z.
-    assert!(a.size[2] / extent[2] < a.size[0] / extent[0]);
-    assert!(a.size[2] / extent[2] < a.size[1] / extent[1]);
+    let center = [
+        a.at[0],
+        a.at[1] + a.size[1] + 0.12 + extent[1] * scale * 0.5,
+        a.at[2],
+    ];
+    // The floating item is bottom-grounded above furniture, not centered inside it.
+    assert!(size[2] / extent[2] < size[0] / extent[0]);
+    assert!(size[2] / extent[2] < size[1] / extent[1]);
     for source in &model.vertices {
         let expected = std::array::from_fn(|i| {
             center[i] + (source.position[i] - (model.min[i] + model.max[i]) * 0.5) * scale
@@ -146,15 +214,15 @@ fn fitted_mesh(scene: &[Vertex], model: &Model, a: &hair::host_scene::Anchor) {
         for i in 0..3 {
             min[i] = min[i].min(v.position[i]);
             max[i] = max[i].max(v.position[i]);
-            assert!(v.position[i] >= center[i] - a.size[i] * 0.5 - EPS);
-            assert!(v.position[i] <= center[i] + a.size[i] * 0.5 + EPS);
+            assert!(v.position[i] >= center[i] - size[i] * 0.5 - EPS);
+            assert!(v.position[i] <= center[i] + size[i] * 0.5 + EPS);
         }
     }
     for i in 0..3 {
         assert!(((min[i] + max[i]) * 0.5 - center[i]).abs() <= EPS);
         assert!(((max[i] - min[i]) / extent[i] - scale).abs() <= EPS);
     }
-    assert!((max[2] - min[2] - a.size[2]).abs() <= EPS);
+    assert!((max[2] - min[2] - size[2]).abs() <= EPS);
 }
 // Presentation successor: the original outside_bytes equality is archived in
 // gpu/archive/local_model_preview_tests.original.rs, not silently preserved.
@@ -257,8 +325,7 @@ pub(super) fn assert_presentation_preservation(
         a.at[1] + a.size[1] + 0.22,
         a.at[2] + a.size[2] * 0.5 + 0.02,
     ];
-    let mut old_owned = content;
-    old_owned.extend_from_slice(&status);
+    let mut old_owned = reference_placeholder(theme, a, &bound.entry.name);
     old_owned.extend(hair::text::object_label(&name, at, 25));
     old_owned.extend(hair::text::object_label(
         hair::folder_scene::kind(&bound.entry),
@@ -268,12 +335,7 @@ pub(super) fn assert_presentation_preservation(
     let mut new_owned = source.to_vec();
     assert_eq!(new_owned.len(), 12);
     let z = a.at[2] - a.size[2] * 0.5 - 0.35;
-    new_owned.extend(status.into_iter().map(|mut v| {
-        v.position[0] = a.at[0] + (v.position[0] - a.at[0]) * 0.5;
-        v.position[1] -= 0.18;
-        v.position[2] = z + (v.position[2] - a.at[2]) * 0.3;
-        v
-    }));
+    // Class-specific source replaces the generic item, not furniture or a second status marker.
     // Declared filename/type layout successor only. Status/source/subtraction
     // and every unrelated-geometry equality above/below remain unchanged.
     let at = [a.at[0] + 1.0, a.at[1] + a.size[1] - 0.2, z];
@@ -345,6 +407,8 @@ fn static_glb_presentation_preserves_source_fit_and_other_geometry() {
     assert_eq!(anchor.role, "document");
     let inward = host.portal_inward(id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [
             anchor.at[0] + 1.05 * inward[0],
             anchor.at[2] + 1.05 * inward[1],

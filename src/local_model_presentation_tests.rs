@@ -121,10 +121,11 @@ fn is_source(v: &Vertex) -> bool {
     v.texture == 0 && near(v.color, source_color())
 }
 fn reference_mesh(a: &hair::host_scene::Anchor) -> Vec<Vertex> {
-    let center = [a.at[0], a.at[1] + a.size[1] * 0.5, a.at[2]];
+    let size = [0.8, 0.85, 0.28];
     let scale = (0..3)
-        .map(|i| a.size[i] / [4.0, 2.0, 6.0][i])
+        .map(|i| size[i] / [4.0, 2.0, 6.0][i])
         .fold(f32::INFINITY, f32::min);
+    let center = [a.at[0], a.at[1] + a.size[1] + 0.12 + scale, a.at[2]];
     INDICES
         .iter()
         .map(|&index| Vertex {
@@ -178,7 +179,7 @@ fn shadow(snapshot: &Snapshot, app: &App) -> World {
     world.interaction = app.world.interaction.clone();
     world
 }
-fn decorations(app: &App, snapshot: &Snapshot, scene: &[Vertex]) -> [Vec<Vertex>; 3] {
+fn decorations(app: &App, snapshot: &Snapshot, scene: &[Vertex]) -> [Vec<Vertex>; 2] {
     let theme = &app.themes[app.theme_index];
     let mut nameless = shadow(snapshot, app);
     nameless
@@ -189,7 +190,7 @@ fn decorations(app: &App, snapshot: &Snapshot, scene: &[Vertex]) -> [Vec<Vertex>
         .get_mut("entry-0")
         .unwrap()
         .entry
-        .name = " ".repeat(64).into();
+        .name = format!("{}.glb", " ".repeat(64)).into();
     // The existing quoted/25-column name producer emits only a far-left quote
     // and far-right truncation glyph for this probe. Unlike display("") == "\"\"",
     // its ink cannot subtract real central filename cells. No disk/name mutation;
@@ -216,11 +217,11 @@ fn decorations(app: &App, snapshot: &Snapshot, scene: &[Vertex]) -> [Vec<Vertex>
         .flatten()
         .copied()
         .collect();
-    for (role, mesh) in [
-        ("filename", &filename),
-        ("type", &kind),
-        ("status", &marker),
-    ] {
+    assert!(
+        marker.is_empty(),
+        "class item replaces obsolete duplicate status cuboid; full status remains in I"
+    );
+    for (role, mesh) in [("filename", &filename), ("type", &kind)] {
         assert!(
             !mesh.is_empty(),
             "MODEL_PRESENTATION_METADATA_REMOVED role={role}"
@@ -247,7 +248,7 @@ fn decorations(app: &App, snapshot: &Snapshot, scene: &[Vertex]) -> [Vec<Vertex>
             "literal filename shape changed"
         );
     }
-    [filename, kind, marker]
+    [filename, kind]
 }
 
 fn matrix(p: &Pose, [w, h]: [u32; 2]) -> DMat4 {
@@ -346,7 +347,7 @@ fn overlap(subject: &[DVec2], clip: &[DVec2]) -> f64 {
 fn check_projection(
     app: &App,
     expected: &[Vertex],
-    parts: &[Vec<Vertex>; 3],
+    parts: &[Vec<Vertex>; 2],
     size: [u32; 2],
     stage: &str,
     failures: &mut Vec<String>,
@@ -592,9 +593,11 @@ fn local_static_model_content_is_unobstructed_at_approach() {
     assert!(host.open_platform && host.geometry.is_empty() && host.overhead.is_empty());
     let n = host.portal_inward(&a.id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [a.at[0] + 1.05 * n[0], a.at[2] + 1.05 * n[1]],
         yaw: (-n[0]).atan2(n[1]),
-        pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / 1.05).atan(),
+        pitch: ((a.at[1] + a.size[1] + 0.12 + 0.28 / 6.0 - 1.65) / 1.05).atan(),
     };
     assert!(!host.blocked(app.pose.position));
     app.world.explicit_target = None;

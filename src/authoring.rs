@@ -6,6 +6,7 @@ use std::os::{
     unix::fs::{MetadataExt, OpenOptionsExt},
 };
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     fs::{File, OpenOptions},
     io::Write,
@@ -13,6 +14,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[derive(Clone)]
 pub struct Project {
     source: PathBuf,
     bytes: Vec<u8>,
@@ -25,12 +27,30 @@ pub struct Project {
     pub door_active: bool,
     retained: BTreeMap<u8, RetainedAsset>,
     surfaces: BTreeMap<String, SurfaceAsset>,
+    decorations: Option<crate::decoration::Spec>,
+    catalog_sources: BTreeMap<String, CatalogSource>,
+    sky: Option<crate::sky::SkySpec>,
+    sky_source: Option<SkySource>,
+}
+/// Separate appearance closure, never a model-cache or Pin resource. At most
+/// 4,000,000 original bytes, shared on clone; old/new closures coexist only
+/// during a transaction. This retention is additional to adapter work admission.
+#[derive(Clone)]
+struct SkySource {
+    source: PathBuf,
+    bytes: std::sync::Arc<[u8]>,
+}
+#[derive(Clone)]
+struct CatalogSource {
+    source: PathBuf,
+    bytes: std::sync::Arc<[u8]>,
 }
 #[derive(Clone)]
 struct SurfaceAsset {
     edit: crate::materials::Surface,
     texture: Option<(PathBuf, Vec<u8>)>,
 }
+#[derive(Clone)]
 struct RetainedAsset {
     source: PathBuf,
     bytes: Vec<u8>,
@@ -101,6 +121,10 @@ struct WholeProject {
     assets: Vec<SavedProject>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     surfaces: Vec<crate::materials::Surface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decorations: Option<crate::decoration::Spec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sky: Option<crate::sky::SkySpec>,
 }
 #[derive(Serialize)]
 struct Provenance {
@@ -128,6 +152,137 @@ impl Project {
             door_active: false,
             retained: BTreeMap::new(),
             surfaces: BTreeMap::new(),
+            decorations: None,
+            catalog_sources: BTreeMap::new(),
+            sky: None,
+            sky_source: None,
+        }
+    }
+    /// Explicit shared sky declaration; absence is exact Legacy, not a colour.
+    pub fn sky(&self) -> Option<&crate::sky::SkySpec> {
+        self.sky.as_ref()
+    }
+    pub fn set_sky_colour(&mut self, rgb: [f64; 3]) -> Result<Theme> {
+        crate::sky::SkyAppearance::Colour(rgb).validate()?;
+        self.commit_sky(Some(crate::sky::SkySpec::Colour { rgb }), None)
+    }
+    /// Acquire one bounded static PNG, retaining exact original bytes. The shared
+    /// visitor loader applies Fill/default background; no options/schema fork.
+    pub fn import_sky_panorama(&mut self, source: &Path) -> Result<Theme> {
+        let source = read_sky_source(source)?;
+        self.commit_sky(
+            Some(crate::sky::SkySpec::Panorama {
+                file: "sky.png".into(),
+            }),
+            Some(source),
+        )
+    }
+    /// Clearing is an explicit edit; it restores historical absence/version selection.
+    pub fn clear_sky(&mut self) -> Result<Theme> {
+        self.commit_sky(None, None)
+    }
+    fn commit_sky(
+        &mut self,
+        sky: Option<crate::sky::SkySpec>,
+        source: Option<SkySource>,
+    ) -> Result<Theme> {
+        let old = std::mem::replace(&mut self.sky, sky);
+        let old_source = std::mem::replace(&mut self.sky_source, source);
+        match self.preview() {
+            Ok(theme) => Ok(theme),
+            Err(error) => {
+                self.sky = old;
+                self.sky_source = old_source;
+                Err(error)
+            }
+        }
+    }
+    /// Shared visitor vocabulary, absent on legacy role-only projects.
+    pub fn catalog(&self) -> Option<&crate::decoration::Spec> {
+        self.decorations.as_ref()
+    }
+    /// Import one explicit asset and its first choice together: unused asset
+    /// declarations are never an intermediate accepted state.
+    pub fn import_catalog_asset(
+        &mut self,
+        asset: crate::decoration::Asset,
+        entry: crate::decoration::Entry,
+        source: &Path,
+    ) -> Result<Theme> {
+        let mut spec = self.decorations.clone().unwrap_or_default();
+        if self.catalog_sources.contains_key(&asset.file) {
+            return Err(
+                "Catalog file already retained; reuse its asset or explicitly replace its source"
+                    .into(),
+            );
+        }
+        let file = asset.file.clone();
+        spec.assets.push(asset);
+        spec.entries.push(entry);
+        validate_catalog(&spec)?;
+        let mut sources = self.catalog_sources.clone();
+        sources.insert(file, read_catalog_source(source)?);
+        self.commit_catalog(spec, sources)
+    }
+    /// Metadata edits, choice reuse, removal and rebinding are one complete
+    /// candidate. Files must already be retained; this never follows a new path.
+    pub fn set_catalog(&mut self, spec: crate::decoration::Spec) -> Result<Theme> {
+        self.commit_catalog(spec, self.catalog_sources.clone())
+    }
+    /// Replace an explicitly named retained closure, affecting all declarations
+    /// sharing that exact file. Equal bytes at another path confer no authority.
+    pub fn replace_catalog_source(&mut self, asset_id: &str, source: &Path) -> Result<Theme> {
+        let spec = self.decorations.clone().ok_or("No catalog")?;
+        let asset = spec
+            .assets
+            .iter()
+            .find(|a| a.id == asset_id)
+            .ok_or("Catalog asset absent")?;
+        let mut sources = self.catalog_sources.clone();
+        sources.insert(asset.file.clone(), read_catalog_source(source)?);
+        self.commit_catalog(spec, sources)
+    }
+    /// Remove a choice and retire its asset only when no remaining choice uses it.
+    pub fn remove_catalog_entry(&mut self, id: &str) -> Result<Theme> {
+        let mut spec = self.decorations.clone().ok_or("No catalog")?;
+        if !spec.entries.iter().any(|e| e.id == id) {
+            return Err("Catalog entry absent".into());
+        }
+        spec.entries.retain(|e| e.id != id);
+        spec.assets
+            .retain(|a| spec.entries.iter().any(|e| e.asset == a.id));
+        self.set_catalog(spec)
+    }
+    /// Explicitly remove the asset AND its referencing choices atomically.
+    /// Use set_catalog for an atomic rebind that keeps those choices instead.
+    pub fn remove_catalog_asset(&mut self, id: &str) -> Result<Theme> {
+        let mut spec = self.decorations.clone().ok_or("No catalog")?;
+        if !spec.assets.iter().any(|a| a.id == id) {
+            return Err("Catalog asset absent".into());
+        }
+        spec.entries.retain(|e| e.asset != id);
+        spec.assets.retain(|a| a.id != id);
+        self.set_catalog(spec)
+    }
+    fn commit_catalog(
+        &mut self,
+        spec: crate::decoration::Spec,
+        mut sources: BTreeMap<String, CatalogSource>,
+    ) -> Result<Theme> {
+        validate_catalog(&spec)?;
+        if spec.assets.iter().any(|a| !sources.contains_key(&a.file)) {
+            return Err("Catalog asset has no retained source; use explicit import".into());
+        }
+        sources.retain(|file, _| spec.assets.iter().any(|a| &a.file == file));
+        let old_spec = self.decorations.replace(spec);
+        let old_sources = std::mem::replace(&mut self.catalog_sources, sources);
+        match self.preview() {
+            Ok(theme) => Ok(theme),
+            Err(error) => {
+                self.decorations = old_spec;
+                self.catalog_sources = old_sources;
+                Err(error)
+            }
         }
     }
     pub fn clear_surface_texture(&mut self, surface: &str) -> Result<Theme> {
@@ -304,6 +459,10 @@ impl Project {
             self.scale = 1.0;
         }
         self.surfaces = previous.surfaces.clone();
+        self.decorations = previous.decorations.clone();
+        self.catalog_sources = previous.catalog_sources.clone();
+        self.sky = previous.sky.clone();
+        self.sky_source = previous.sky_source.clone();
         self.retained = previous
             .retained
             .iter()
@@ -356,7 +515,7 @@ impl Project {
         for a in self.assets() {
             let file = files
                 .iter()
-                .find(|(name, b)| name.ends_with(".glb") && **b == a.bytes)
+                .find(|(name, b)| is_role_file(name) && **b == a.bytes)
                 .ok_or("missing model copy")?
                 .0
                 .clone();
@@ -370,6 +529,8 @@ impl Project {
         }
         let document = toml::to_string(&WholeProject {
             version: if self.surfaces.is_empty()
+                && self.decorations.is_none()
+                && self.sky.is_none()
                 && !self.bytes.is_empty()
                 && !self.assets().iter().any(|a| a.door)
                 && !self.door_active
@@ -382,10 +543,16 @@ impl Project {
             active_door: self.door_active,
             assets,
             surfaces: self.surfaces(),
+            decorations: self.decorations.clone(),
+            sky: self.sky.clone(),
         })
         .map_err(|e| e.to_string())?;
+        if document.len() > 16384 {
+            return Err("Editable project exceeds 16384 bytes".into());
+        }
         let mut protected = protected.to_vec();
         protected.extend(self.assets().into_iter().map(|a| a.source));
+        protected.extend(self.catalog_protected());
         protected.extend(
             self.surfaces
                 .values()
@@ -396,9 +563,9 @@ impl Project {
             .iter()
             .filter(|(n, _)| n.ends_with(".glb") || n.ends_with(".png"))
         {
-            dir.write(name, bytes)?;
+            dir.write_output(name, bytes)?;
         }
-        dir.write("project.toml", document.as_bytes())?;
+        dir.write_output("project.toml", document.as_bytes())?;
         dir.check_identity()?;
         Ok(dir.path.join("project.toml"))
     }
@@ -416,20 +583,29 @@ impl Project {
         if version == Some(1) {
             return Err("Legacy v1 project preserved, not opened: world placement is NOT asset-local pivot. Import original GLB and save/export into NEW folders (v3 project); no automatic layout conversion".into());
         }
-        let (active, active_door, saved, surfaces) = if version == Some(2) {
+        let (active, active_door, saved, surfaces, decorations, sky) = if version == Some(2) {
             let saved: SavedProject = toml::from_str(text).map_err(|e| e.to_string())?;
             if saved.asset != "model.glb" || saved.door {
                 return Err("v2 requires relative model.glb and legacy model role".into());
             }
-            (saved.edit.document_role, false, vec![saved], Vec::new())
+            (
+                saved.edit.document_role,
+                false,
+                vec![saved],
+                Vec::new(),
+                None,
+                None,
+            )
         } else if matches!(version, Some(3 | 4)) {
             let saved: WholeProject = toml::from_str(text).map_err(|e| e.to_string())?;
             if version == Some(3)
                 && (header.get("surfaces").is_some()
+                    || header.get("decorations").is_some()
+                    || header.get("sky").is_some()
                     || header.get("active_door").is_some()
                     || saved.assets.iter().any(|a| a.door))
             {
-                return Err("surfaces / door-trim require editable v4".into());
+                return Err("surfaces / door-trim / decorations / sky require editable v4".into());
             }
             crate::materials::validate(&saved.surfaces)?;
             (
@@ -437,6 +613,8 @@ impl Project {
                 saved.active_door,
                 saved.assets,
                 saved.surfaces,
+                saved.decorations,
+                saved.sky,
             )
         } else {
             return Err("Unsupported project version; expected v2, v3 or v4".into());
@@ -478,6 +656,23 @@ impl Project {
             return Err("active project role absent".into());
         };
         p.retained = roles;
+        if let Some(spec) = decorations {
+            validate_catalog(&spec)?;
+            for asset in &spec.assets {
+                if !p.catalog_sources.contains_key(&asset.file) {
+                    p.catalog_sources.insert(
+                        asset.file.clone(),
+                        // Our saved closure uses the same project-root reader as
+                        // roles/surfaces, not external selected-source policy.
+                        CatalogSource {
+                            source: parent.join(&asset.file),
+                            bytes: read_local(parent, &asset.file, 8_000_000)?.into(),
+                        },
+                    );
+                }
+            }
+            p.decorations = Some(spec);
+        }
         for edit in surfaces {
             let texture = if let Some(file) = &edit.file {
                 if file != &format!("{}.png", edit.surface) {
@@ -496,6 +691,16 @@ impl Project {
             p.surfaces
                 .insert(edit.surface.clone(), SurfaceAsset { edit, texture });
         }
+        if let Some(crate::sky::SkySpec::Panorama { file }) = &sky {
+            validate_project_sky_file(file)?;
+            // Saved closures use project-root semantics, NOT external selected
+            // source ancestor policy. Leaf safety and finite reads still apply.
+            p.sky_source = Some(SkySource {
+                source: parent.join(file),
+                bytes: read_sky_bytes(parent, file)?.into(),
+            });
+        }
+        p.sky = sky;
         p.preview()?;
         Ok(p)
     }
@@ -528,6 +733,10 @@ impl Project {
             door_active: false,
             retained: BTreeMap::new(),
             surfaces: BTreeMap::new(),
+            decorations: None,
+            catalog_sources: BTreeMap::new(),
+            sky: None,
+            sky_source: None,
         };
         p.fit();
         Ok(p)
@@ -544,12 +753,14 @@ impl Project {
         self.solid = false;
         self.fit();
     }
-    fn files(&self) -> Result<BTreeMap<String, Vec<u8>>> {
+    fn files(&self) -> Result<BTreeMap<String, Cow<'_, [u8]>>> {
         let assets = self.assets();
         let mut files = BTreeMap::new();
         let mut manifest = format!(
             "version={}\nname='Workshop object'\n",
             if self.surfaces.is_empty()
+                && self.decorations.is_none()
+                && self.sky.is_none()
                 && !self.bytes.is_empty()
                 && !assets.iter().any(|a| a.door)
                 && !self.door_active
@@ -589,7 +800,7 @@ impl Project {
                 "decoration"
             };
             manifest.push_str(&format!("[[roles]]\nrole='{role}'\nfile='{file}'\nmax_extent=10.0\npivot={:?}\nyaw_degrees={}\nscale={}\n", a.edit.at,a.edit.yaw_degrees,a.edit.scale));
-            files.insert(file, a.bytes);
+            files.insert(file, Cow::Owned(a.bytes));
             provenance.push_str(&format!("[{role}]\n"));
             provenance.push_str(
                 &toml::to_string(&Provenance {
@@ -606,7 +817,7 @@ impl Project {
             if let Some((source, bytes)) = &a.texture {
                 files.insert(
                     a.edit.file.clone().ok_or("missing surface file")?,
-                    bytes.clone(),
+                    Cow::Borrowed(bytes.as_slice()),
                 );
                 provenance.push_str(&format!("[{}]\n", a.edit.surface));
                 provenance.push_str(
@@ -619,8 +830,68 @@ impl Project {
                 );
             }
         }
-        files.insert("pack.toml".into(), manifest.into_bytes());
-        files.insert("PROVENANCE.toml".into(), provenance.into_bytes());
+        if let Some(spec) = &self.decorations {
+            validate_catalog(spec)?;
+            #[derive(Serialize)]
+            struct Catalog<'a> {
+                decorations: &'a crate::decoration::Spec,
+            }
+            manifest.push_str(
+                &toml::to_string(&Catalog { decorations: spec }).map_err(|e| e.to_string())?,
+            );
+            for asset in &spec.assets {
+                let source = self
+                    .catalog_sources
+                    .get(&asset.file)
+                    .ok_or("Catalog asset has no retained source; use explicit import")?;
+                files.insert(asset.file.clone(), Cow::Borrowed(source.bytes.as_ref()));
+            }
+            for (file, source) in &self.catalog_sources {
+                provenance.push_str(&format!("[catalog.\"{file}\"]\n"));
+                provenance.push_str(
+                    &toml::to_string(&Provenance {
+                        source: source.source.display().to_string(),
+                        license: "UNKNOWN — supplied original; no redistribution rights inferred",
+                        distribution: "Private user export only; check rights before sharing",
+                    })
+                    .map_err(|e| e.to_string())?,
+                );
+            }
+        }
+        if let Some(spec) = &self.sky {
+            if let crate::sky::SkySpec::Panorama { file } = spec {
+                validate_project_sky_file(file)?;
+                let source = self
+                    .sky_source
+                    .as_ref()
+                    .ok_or("Sky panorama has no retained source")?;
+                // The fixed portable leaf cannot alias role/catalog/surface or
+                // manifest/provenance output. Check before insertion regardless.
+                if files.keys().any(|name| name.eq_ignore_ascii_case(file)) {
+                    return Err("Sky output filename collision".into());
+                }
+                files.insert(file.clone(), Cow::Borrowed(source.bytes.as_ref()));
+                provenance.push_str("[sky]\n");
+                provenance.push_str(
+                    &toml::to_string(&Provenance {
+                        source: source.source.display().to_string(),
+                        license: "UNKNOWN — supplied original; no redistribution rights inferred",
+                        distribution: "Private user export only; check rights before sharing",
+                    })
+                    .map_err(|e| e.to_string())?,
+                );
+            }
+            #[derive(Serialize)]
+            struct Sky<'a> {
+                sky: &'a crate::sky::SkySpec,
+            }
+            manifest.push_str(&toml::to_string(&Sky { sky: spec }).map_err(|e| e.to_string())?);
+        }
+        files.insert("pack.toml".into(), Cow::Owned(manifest.into_bytes()));
+        files.insert(
+            "PROVENANCE.toml".into(),
+            Cow::Owned(provenance.into_bytes()),
+        );
         Ok(files)
     }
     pub fn preview(&self) -> Result<Theme> {
@@ -643,7 +914,7 @@ impl Project {
         if dir.check_identity().is_ok() {
             let _ = std::fs::remove_dir_all(&path);
         }
-        result
+        result.map_err(|e| format!("Preview validation failed; no public output created: {e}"))
     }
     pub fn export(&self, target: &Path, protected: &[PathBuf]) -> Result<PathBuf> {
         // Complete shared-loader/role/collision validation BEFORE target creation.
@@ -651,6 +922,7 @@ impl Project {
         let files = self.files()?;
         let mut protected = protected.to_vec();
         protected.extend(self.assets().into_iter().map(|a| a.source));
+        protected.extend(self.catalog_protected());
         protected.extend(
             self.surfaces
                 .values()
@@ -658,11 +930,125 @@ impl Project {
         );
         let dir = NewDirectory::create(target, &protected)?;
         for (name, bytes) in &files {
-            dir.write(name, bytes)?;
+            dir.write_output(name, bytes)?;
         }
         dir.check_identity()?;
         Ok(dir.path.join("pack.toml"))
     }
+    fn catalog_protected(&self) -> Vec<PathBuf> {
+        // Both catalog and Sky held closures use this deleted-source policy.
+        // Deleted disposable originals are not a reopening dependency. Existing
+        // inputs still participate in overlap refusal; outputs are always NEW.
+        self.catalog_sources
+            .values()
+            .filter(|s| s.source.try_exists().unwrap_or(true))
+            .map(|s| s.source.clone())
+            .chain(
+                self.sky_source
+                    .iter()
+                    .filter(|s| s.source.try_exists().unwrap_or(true))
+                    .map(|s| s.source.clone()),
+            )
+            .collect()
+    }
+}
+
+fn validate_project_sky_file(file: &str) -> Result<()> {
+    if file != "sky.png" {
+        return Err(
+            "Editable panorama closure requires reserved sky.png; no path/filename aliases".into(),
+        );
+    }
+    Ok(())
+}
+fn read_sky_bytes(root: &Path, file: &str) -> Result<Vec<u8>> {
+    let bytes = read_local(root, file, 4_000_000)?;
+    if bytes.capacity() > 8 * 1024 * 1024 {
+        return Err("Sky encoded source capacity exceeds existing 8 MiB work allowance".into());
+    }
+    Ok(bytes)
+}
+fn read_sky_source(source: &Path) -> Result<SkySource> {
+    if source.extension().and_then(|s| s.to_str()) != Some("png") {
+        return Err("Choose a supported local .png for sky".into());
+    }
+    let absolute = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(source)
+    };
+    let relative = absolute
+        .strip_prefix("/")
+        .map_err(|e| e.to_string())?
+        .to_str()
+        .ok_or("Sky source must be UTF-8")?;
+    // Pin every selected-source ancestor, as for catalog acquisition. Do not
+    // canonicalize away symlink/traversal evidence before this read.
+    let bytes = read_sky_bytes(Path::new("/"), relative)?;
+    Ok(SkySource {
+        source: absolute,
+        bytes: bytes.into(),
+    })
+}
+
+fn is_role_file(file: &str) -> bool {
+    ["model.glb", "model-1.glb", "model-2.glb"].contains(&file)
+}
+fn validate_catalog(spec: &crate::decoration::Spec) -> Result<()> {
+    spec.validate()?;
+    let mut files = BTreeMap::new();
+    for asset in &spec.assets {
+        asset.validate_fit()?;
+        // Flat editable closure; no role-path alias or byte-based authority merge.
+        // Caller chooses the explicit relative filename, not an inferred identity.
+        if !asset.file.ends_with(".glb")
+            || asset.file.len() > 96
+            || !asset
+                .file
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        {
+            return Err("Catalog requires an explicit flat non-role .glb filename <=96 bytes (ASCII letters/digits/-/_/.)".into());
+        }
+        leaf(&asset.file)?;
+        let folded = asset.file.to_ascii_lowercase();
+        // APFS and case-sensitive exports must accept the same closure. Exact
+        // acquired-path reuse by distinct asset IDs remains intentional.
+        if is_role_file(&folded)
+            || files
+                .insert(folded, asset.file.as_str())
+                .is_some_and(|previous| previous != asset.file)
+        {
+            return Err("Catalog case-insensitive filename collision with a reserved role or distinct catalog path".into());
+        }
+    }
+    Ok(())
+}
+fn read_catalog_source(source: &Path) -> Result<CatalogSource> {
+    if source.extension().and_then(|s| s.to_str()) != Some("glb") {
+        return Err("Choose a supported local .glb".into());
+    }
+    let absolute = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(source)
+    };
+    let relative = absolute
+        .strip_prefix("/")
+        .map_err(|e| e.to_string())?
+        .to_str()
+        .ok_or("Catalog source must be UTF-8")?;
+    // Start at the root descriptor so symlink ancestors of the selected file
+    // cannot be hidden by canonicalizing its parent before acquisition.
+    let bytes = read_local(Path::new("/"), relative, 8_000_000)?;
+    Ok(CatalogSource {
+        source: absolute,
+        bytes: bytes.into(),
+    })
 }
 
 // Darwin descriptor-relative writer, not a general same-user filesystem sandbox.
@@ -751,7 +1137,7 @@ impl NewDirectory {
         };
         if fd < 0 {
             return Err(format!(
-                "Exclusive export write refused; partial NEW output retained: {}",
+                "Exclusive new-file write refused: {}",
                 std::io::Error::last_os_error()
             ));
         }
@@ -759,7 +1145,11 @@ impl NewDirectory {
         let mut file = unsafe { File::from_raw_fd(fd) };
         file.write_all(bytes)
             .and_then(|_| file.flush())
-            .map_err(|e| format!("Export I/O error; partial NEW output retained: {e}"))
+            .map_err(|e| format!("New-file I/O error: {e}"))
+    }
+    fn write_output(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        self.write(name, bytes)
+            .map_err(|e| format!("{e}; partial NEW output retained: {}", self.path.display()))
     }
     fn check_identity(&self) -> Result<()> {
         let a = self.held.metadata().map_err(|e| e.to_string())?;
@@ -794,10 +1184,17 @@ mod tests {
         let victim = p.join("sentinel");
         std::fs::write(&victim, b"sentinel").unwrap();
         std::fs::write(d.path.join("late.glb"), b"existing").unwrap();
-        assert!(d.write("late.glb", b"replacement").is_err());
+        let error = d.write("late.glb", b"replacement").unwrap_err();
+        assert!(error.contains("Exclusive new-file write refused"));
+        assert!(!error.contains("partial NEW output retained"));
+        let error = d.write_output("late.glb", b"replacement").unwrap_err();
+        assert!(error.contains("partial NEW output retained"));
+        assert!(error.contains(&d.path.display().to_string()));
         assert_eq!(std::fs::read(d.path.join("late.glb")).unwrap(), b"existing");
         std::os::unix::fs::symlink(&victim, d.path.join("linked.glb")).unwrap();
         assert!(d.write("linked.glb", b"replacement").is_err());
+        std::fs::hard_link(&victim, d.path.join("hardlinked.glb")).unwrap();
+        assert!(d.write_output("hardlinked.glb", b"replacement").is_err());
         assert_eq!(std::fs::read(victim).unwrap(), b"sentinel");
         std::fs::remove_dir_all(p).unwrap();
     }
@@ -817,5 +1214,79 @@ mod tests {
         assert!(!target.join("model.glb").exists());
         assert!(d.check_identity().is_err());
         std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn sky_growth_after_metadata_refuses_selected_and_saved_closures_without_replacement() {
+        use crate::content::read_test_hook::AFTER_METADATA;
+        let base = base("sky-growth").canonicalize().unwrap();
+        let source = base.join("selected.png");
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[20, 80, 40, 255].repeat(2))
+                .unwrap();
+        }
+        std::fs::write(&source, &bytes).unwrap();
+        let mut project = Project::blank();
+        let good = project.import_sky_panorama(&source).unwrap();
+        let held = project.sky_source.as_ref().unwrap().bytes.clone();
+        let relative = source
+            .strip_prefix("/")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let growing = source.clone();
+        AFTER_METADATA.with(|slot| {
+            *slot.borrow_mut() = Some((
+                relative,
+                Box::new(move || {
+                    OpenOptions::new()
+                        .write(true)
+                        .open(growing)
+                        .unwrap()
+                        .set_len(4_000_001)
+                        .unwrap();
+                }),
+            ))
+        });
+        let error = project.import_sky_panorama(&source).err().unwrap();
+        assert!(error.contains("grew beyond budget"), "{error}");
+        assert_eq!(project.preview().unwrap().sky, good.sky);
+        assert!(std::sync::Arc::ptr_eq(
+            &held,
+            &project.sky_source.as_ref().unwrap().bytes
+        ));
+        let cloned = project.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &held,
+            &cloned.sky_source.as_ref().unwrap().bytes
+        ));
+        let saved = project.save_new(&base.join("saved"), &[]).unwrap();
+        let leaf = saved.parent().unwrap().join("sky.png");
+        AFTER_METADATA.with(|slot| {
+            *slot.borrow_mut() = Some((
+                "sky.png".into(),
+                Box::new(move || {
+                    OpenOptions::new()
+                        .write(true)
+                        .open(leaf)
+                        .unwrap()
+                        .set_len(4_000_001)
+                        .unwrap();
+                }),
+            ))
+        });
+        let error = Project::open(&saved).err().unwrap();
+        assert!(error.contains("grew beyond budget"), "{error}");
+        AFTER_METADATA.with(|slot| assert!(slot.borrow().is_none()));
+        assert_eq!(&*held, bytes);
+        // Owned fixture intentionally retained for evidence, including grown inputs.
+        println!("SLICE7C_GROWTH_FIXTURE={}", base.display());
     }
 }

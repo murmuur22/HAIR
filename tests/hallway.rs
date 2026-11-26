@@ -42,6 +42,8 @@ fn authored_hallway_is_continuous_not_a_chain_of_portal_arrivals() {
     )
     .unwrap();
     let mut pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: scene.spawn,
         yaw: 0.0,
         pitch: 0.0,
@@ -91,6 +93,8 @@ fn overhead_occludes_real_target_rays_without_changing_legacy_boxes() {
     anchor.at = [0.0, 2.5, 1.0];
     anchor.size = [0.2, 0.5, 0.2];
     let pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 2.5],
         yaw: 0.0,
         pitch: (2.75_f32 - 1.65).atan2(1.5),
@@ -179,6 +183,8 @@ fn doorway_and_concave_corner_block_tunnelling_across_reskins() {
         let mut end = None;
         for theme in [&a, &b] {
             let mut pose = Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: start,
                 yaw,
                 pitch: 0.0,

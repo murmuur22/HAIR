@@ -86,7 +86,13 @@ pub mod owned {
             let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .canonicalize()
                 .unwrap();
-            assert!(base.starts_with(source.parent().unwrap()));
+            // The Mini launcher supplies Hermes-owned scratch rather than the
+            // predecessor's sibling scratch. Keep exclusivity/source separation.
+            let scratch = PathBuf::from(std::env::var_os("HOME").expect("explicit HOME"))
+                .join(".hermes/cache/scratch")
+                .canonicalize()
+                .unwrap();
+            assert!(base.starts_with(source.parent().unwrap()) || base.starts_with(scratch));
             assert!(!base.starts_with(&source) && !source.starts_with(&base));
             let path = base.join(format!(
                 "gs{}-{}",

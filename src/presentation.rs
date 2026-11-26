@@ -1,4 +1,4 @@
-//! Session-only presentation pause menu and screen-space UI scale.
+//! Presentation pause menu and screen-space UI scale.
 //! World geometry/camera and world-space labels are never scaled here.
 
 /// Requested screen-space scale steps. 100% is the historical physical-pixel HUD.
@@ -62,16 +62,26 @@ fn lines(menu: &Menu, percent: u16, physical: [u32; 2]) -> Vec<(String, [f32; 3]
             ("PAUSED".into(), ACCENT),
             ("UP/DOWN/TAB + ENTER | ESC RESUMES".into(), TEXT),
         ],
-        View::Settings => {
-            let mut out = vec![("SETTINGS".into(), ACCENT)];
+        View::Appearance => vec![
+            ("APPEARANCE".into(), ACCENT),
+            ("CATEGORY OVERRIDE: THEME FIRST".into(), TEXT),
+            ("OFF: DIRECTORY FIRST | ESC BACK".into(), TEXT),
+        ],
+        View::Settings => vec![
+            ("SETTINGS".into(), ACCENT),
+            ("UP/DOWN/TAB + ENTER | ESC BACK".into(), TEXT),
+        ],
+        View::Storage => vec![("STORAGE SETTINGS".into(), ACCENT)],
+        View::PlayerSettings => {
+            let mut out = vec![("PLAYER SETTINGS".into(), ACCENT)];
             out.extend(
                 scale_label(percent, physical)
                     .lines()
                     .map(|l| (l.into(), ACCENT)),
             );
             out.push(("SCALES HUD, READER, ADDRESS, MENUS".into(), TEXT));
-            out.push(("WORLD LABELS UNCHANGED | SESSION ONLY".into(), TEXT));
-            out.push(("LEFT/RIGHT STEP | ESC BACK".into(), TEXT));
+            out.push(("FOG: WORLD ONLY | ESC BACK".into(), TEXT));
+            out.push(("LEFT/RIGHT: FOCUSED CONTROL".into(), TEXT));
             out
         }
     }
@@ -80,11 +90,23 @@ fn label(item: Item) -> &'static str {
     match item {
         Item::Resume => "RESUME",
         Item::Settings => "SETTINGS",
+        Item::PlayerSettings => "PLAYER SETTINGS...",
+        Item::Storage => "STORAGE SETTINGS...",
+        Item::StorageItemLimit => "EDIT PER-FILE LIMIT",
+        Item::StorageDiskLimit => "EDIT DISK CAP",
+        Item::StorageChoose => "CHOOSE CACHE FOLDER...",
+        Item::FogEnabled => "TOGGLE FOG",
+        Item::FogDistance => "FOG DISTANCE",
+        Item::FogTint => "FOG TINT",
         Item::Quit => "QUIT HAIR",
         Item::Smaller => "SMALLER  -",
         Item::Larger => "LARGER  +",
-        Item::Reset => "RESET 100%",
+        Item::Reset => "RESET PLAYER DEFAULTS",
         Item::Back => "BACK",
+        Item::Appearance => "APPEARANCE...",
+        Item::Theme => "NEXT THEME PACK",
+        Item::Override(category) => category.label(),
+        Item::FileTree => "TOGGLE FILE TREE",
     }
 }
 /// Panel [x, y, w, h], first text baseline and button rects, all logical pixels.
@@ -92,8 +114,14 @@ fn frame(menu: &Menu, percent: u16, physical: [u32; 2]) -> ([f32; 4], Vec<(Item,
     let [lw, lh] = ui_viewport(physical, percent).map(|v| v as f32);
     let text_rows = lines(menu, percent, physical).len() as f32;
     let items = menu.items();
+    if menu.view == View::Storage {
+        let buttons = items.iter().enumerate().map(|(i, item)| (*item, [16., lh - 132. + i as f32 * 30., lw - 32., 26.])).collect();
+        return ([0., 0., lw, lh], buttons);
+    }
     let w = (lw - 32.0).clamp(1.0, 480.0);
-    let h = 16.0 + text_rows * LINE + GAP + items.len() as f32 * (BUTTON + GAP) + 8.0;
+    let step = ((lh - 24. - text_rows * LINE - GAP) / items.len() as f32).min(BUTTON + GAP);
+    let button = (step - GAP).max(20.);
+    let h = 16.0 + text_rows * LINE + GAP + items.len() as f32 * step + 8.0;
     let x = ((lw - w) * 0.5).max(0.0);
     let y = ((lh - h) * 0.5).max(0.0);
     let first = y + 16.0 + text_rows * LINE + GAP;
@@ -105,9 +133,9 @@ fn frame(menu: &Menu, percent: u16, physical: [u32; 2]) -> ([f32; 4], Vec<(Item,
                 *item,
                 [
                     x + 16.0,
-                    first + i as f32 * (BUTTON + GAP),
+                    first + i as f32 * step,
                     w - 32.0,
-                    BUTTON,
+                    button,
                 ],
             )
         })
@@ -131,8 +159,80 @@ pub fn hit(menu: &Menu, physical: [u32; 2], percent: u16, point: [f64; 2]) -> Op
         .find(|(_, [rx, ry, rw, rh])| x >= *rx && x < rx + rw && y >= *ry && y < ry + rh)
         .map(|(item, _)| item)
 }
+pub fn overlay_with_tree(
+    menu: &Menu,
+    percent: u16,
+    physical: [u32; 2],
+    visible: bool,
+) -> Vec<crate::assets::Vertex> {
+    overlay_state(menu, percent, physical, visible)
+}
+#[cfg(test)]
+#[test]
+fn settings_shows_file_tree_state_without_changing_other_menu_geometry() {
+    let menu = Menu {
+        view: View::PlayerSettings,
+        focus: 0,
+    };
+    let shown = overlay_with_tree(&menu, 100, [640, 480], true);
+    let hidden = overlay_with_tree(&menu, 100, [640, 480], false);
+    assert_ne!(
+        bytemuck::cast_slice::<_, u8>(&shown),
+        bytemuck::cast_slice::<_, u8>(&hidden)
+    );
+    let pause = Menu::pause();
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&overlay_with_tree(&pause, 100, [640, 480], true)),
+        bytemuck::cast_slice::<_, u8>(&overlay_with_tree(&pause, 100, [640, 480], false))
+    );
+}
+
 /// Opaque panel in the existing bitmap style, laid out in the logical viewport.
 pub fn overlay(menu: &Menu, percent: u16, physical: [u32; 2]) -> Vec<crate::assets::Vertex> {
+    overlay_state(menu, percent, physical, false)
+}
+fn overlay_state(
+    menu: &Menu,
+    percent: u16,
+    physical: [u32; 2],
+    visible: bool,
+) -> Vec<crate::assets::Vertex> {
+    overlay_with_appearance(
+        menu,
+        percent,
+        physical,
+        visible,
+        &crate::appearance::Policy::default(),
+        "",
+    )
+}
+pub fn overlay_with_appearance(
+    menu: &Menu,
+    percent: u16,
+    physical: [u32; 2],
+    visible: bool,
+    policy: &crate::appearance::Policy,
+    theme: &str,
+) -> Vec<crate::assets::Vertex> {
+    overlay_with_player(
+        menu,
+        percent,
+        physical,
+        visible,
+        policy,
+        theme,
+        crate::fog::Fog::default(),
+    )
+}
+pub fn overlay_with_player(
+    menu: &Menu,
+    percent: u16,
+    physical: [u32; 2],
+    visible: bool,
+    policy: &crate::appearance::Policy,
+    theme: &str,
+    fog: crate::fog::Fog,
+) -> Vec<crate::assets::Vertex> {
     if physical.contains(&0) {
         return Vec::new();
     }
@@ -166,10 +266,39 @@ pub fn overlay(menu: &Menu, percent: u16, physical: [u32; 2]) -> Vec<crate::asse
     }
     for (item, [bx, by, _, _]) in &buttons {
         let marker = if *item == focus { "> " } else { "  " };
+        let dynamic = match item {
+            Item::FogEnabled => format!("FOG: {}", if fog.enabled() { "ON" } else { "OFF" }),
+            Item::FogDistance => fog.distance_label(),
+            Item::FogTint => fog.tint_label(),
+            Item::Theme => format!("PACK: {theme}"),
+            Item::Override(category) => format!(
+                "{}: {}",
+                category.label(),
+                if policy.overridden(*category) {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+            ),
+            _ => String::new(),
+        };
         p.literal_text(
             bx + 8.0,
             by + 7.0,
-            &fit(&format!("{marker}{}", label(*item))),
+            &fit(&format!(
+                "{marker}{}",
+                if !dynamic.is_empty() {
+                    dynamic.as_str()
+                } else if *item == Item::FileTree {
+                    if visible {
+                        "FILE TREE: ON"
+                    } else {
+                        "FILE TREE: OFF"
+                    }
+                } else {
+                    label(*item)
+                }
+            )),
             GLYPH,
             TEXT,
         );
@@ -180,15 +309,30 @@ pub fn overlay(menu: &Menu, percent: u16, physical: [u32; 2]) -> Vec<crate::asse
 pub enum View {
     Pause,
     Settings,
+    PlayerSettings,
+    Appearance,
+    Storage,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Resume,
     Settings,
+    PlayerSettings,
+    Storage,
+    StorageItemLimit,
+    StorageDiskLimit,
+    StorageChoose,
+    FogEnabled,
+    FogDistance,
+    FogTint,
     Quit,
     Smaller,
     Larger,
     Reset,
+    FileTree,
+    Appearance,
+    Theme,
+    Override(crate::appearance::Category),
     Back,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,7 +371,29 @@ impl Menu {
     pub fn items(&self) -> &'static [Item] {
         match self.view {
             View::Pause => &[Item::Resume, Item::Settings, Item::Quit],
-            View::Settings => &[Item::Smaller, Item::Larger, Item::Reset, Item::Back],
+            View::Settings => &[Item::PlayerSettings, Item::Appearance, Item::Back],
+            View::PlayerSettings => &[
+                Item::Smaller,
+                Item::Larger,
+                Item::Reset,
+                Item::FileTree,
+                Item::FogEnabled,
+                Item::FogDistance,
+                Item::FogTint,
+                Item::Storage,
+                Item::Back,
+            ],
+            View::Storage => &[Item::StorageItemLimit, Item::StorageDiskLimit, Item::StorageChoose, Item::Back],
+            View::Appearance => &[
+                Item::Theme,
+                Item::Override(crate::appearance::Category::Skybox),
+                Item::Override(crate::appearance::Category::Walls),
+                Item::Override(crate::appearance::Category::Floor),
+                Item::Override(crate::appearance::Category::Documents),
+                Item::Override(crate::appearance::Category::Doors),
+                Item::Override(crate::appearance::Category::Decorations),
+                Item::Back,
+            ],
         }
     }
     pub fn focused(&self) -> Item {

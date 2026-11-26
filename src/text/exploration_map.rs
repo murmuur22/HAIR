@@ -196,6 +196,47 @@ struct Layout {
     clip: [f32; 4],
 }
 
+/// Route-first presentation, independent of the visitor's position within a room.
+#[path = "route_map.rs"]
+mod route;
+pub fn route_overlay(map: &Map, mode: MapMode, width: u32, height: u32) -> Vec<Vertex> {
+    route::overlay(map, mode, width, height, [0, 0], None)
+}
+pub fn route_overlay_state(
+    map: &Map,
+    mode: MapMode,
+    width: u32,
+    height: u32,
+    pan: [i32; 2],
+    back: Option<crate::exploration::RoomId>,
+) -> Vec<Vertex> {
+    route::overlay(map, mode, width, height, pan, back)
+}
+
+#[cfg(test)]
+mod route_contract {
+    use super::*;
+    #[test]
+    fn expanded_route_map_is_full_screen_instead_of_an_overlay_panel() {
+        let mut map = Map::default();
+        map.arrive(
+            crate::exploration::RoomId::new("https://test/home", 0),
+            "Home",
+            [],
+            Connection::Portal,
+            false,
+        );
+        let vertices = route_overlay(&map, MapMode::Expanded, 960, 640);
+        for point in [[-1.0, 1.0], [-1.0, -1.0], [1.0, 1.0], [1.0, -1.0]] {
+            assert!(
+                vertices.iter().any(|v| v.position[..2] == point),
+                "missing fullscreen corner {point:?}"
+            );
+        }
+        assert!(route_overlay(&map, MapMode::Hidden, 960, 640).is_empty());
+    }
+}
+
 /// Map overlay in logical viewport pixels; scale stays the parent renderer's job.
 /// Hidden, empty or unfittable views draw nothing rather than covering controls.
 pub fn overlay_at(

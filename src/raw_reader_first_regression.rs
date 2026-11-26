@@ -116,6 +116,8 @@ fn regular_json_file_e_reader_contains_original_text() {
     let anchor = host.anchors.iter().find(|a| a.id == anchor_id).unwrap();
     let inward = host.portal_inward(&anchor_id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [
             anchor.at[0] + 1.05 * inward[0],
             anchor.at[2] + 1.05 * inward[1],

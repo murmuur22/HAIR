@@ -16,8 +16,8 @@ fn panel_collapse_trail_and_visited_survive_follow_back_and_menu() {
     tap(&mut a, KeyCode::KeyM);
     a.key(KeyCode::ShiftLeft, false, false).unwrap();
     assert_eq!(
-        a.world.tree_collapsed, !collapsed,
-        "Shift M toggles the optional web panel"
+        a.world.tree_collapsed, collapsed,
+        "Shift M only toggles the minimap; file tree belongs to Settings"
     );
     let expanded = a.world.tree_collapsed;
     a.world.reading = true;
@@ -45,6 +45,7 @@ fn panel_collapse_trail_and_visited_survive_follow_back_and_menu() {
     assert!(a.menu.is_none());
     assert_eq!(a.world.tree_collapsed, expanded, "menu isolates M");
     tap(&mut a, KeyCode::KeyM);
+    tap(&mut a, KeyCode::KeyM); // close full-screen map before history navigation
     let preference = a.world.tree_collapsed;
     tap(&mut a, KeyCode::KeyR);
     assert_eq!(a.world.current, first, "R is the typed history return");

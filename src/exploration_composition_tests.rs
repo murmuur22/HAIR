@@ -12,6 +12,8 @@ fn renderer(a: &mut App) {
     r.set_theme_appearance(&a.themes[0]).unwrap();
     a.renderer = Some(r);
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.6, -1.5],
         yaw: std::f32::consts::PI,
         pitch: -0.2,
@@ -94,6 +96,8 @@ fn actionable_short_and_long_portals_keep_identical_disclosure_pixels() {
         let door = host.anchors.iter().find(|d| d.id == id).unwrap();
         let inside = host.portal_inward(&id);
         let near = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [door.at[0] + inside[0], door.at[2] + inside[1]],
             yaw: (-inside[0]).atan2(inside[1]),
             pitch: -0.1,

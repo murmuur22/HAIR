@@ -1,7 +1,26 @@
+mod collection_native;
+#[cfg(test)]
+mod directory_map_app_tests;
+mod directory_travel;
 mod folder_dialog;
 mod folder_native;
 mod folder_proof;
+mod inventory_native;
+mod storage_native;
+#[cfg(test)]
+mod storage_documents_tests;
+#[cfg(test)]
+mod item_app_capture_tests;
+mod placement_native;
+mod player_settings;
+#[cfg(test)]
+mod player_settings_r10_tests;
+#[cfg(test)]
+mod player_settings_r11_tests;
+#[cfg(test)]
+mod slice6c_texture_fixture;
 mod presentation_native;
+mod sidebar_input;
 mod web_native;
 use hair::{Action, Input, Pose, Result, World};
 #[cfg(test)]
@@ -140,17 +159,17 @@ fn run() -> Result<()> {
     };
     if args.first().is_some_and(|s| s == "--help") {
         println!(
-            "Reader scrolling: Up/Down scroll one row and repeat while held (native key repeat; after focus loss press again). Mouse wheel scrolls 3 rows per notch; trackpad pixels accumulate smoothly; both clamp to the content and are ignored outside an open reader, in the paused menu, address entry, chooser and image viewer. Web reader keeps <pre> code blocks exactly (indentation, blank lines, case, punctuation) with passive colouring for Python, Rust, JavaScript/TypeScript, C/C++, shell, JSON and HTML/XML; other languages stay plain. Code rows show '|' at a source line start and '>' on soft-wrapped continuation rows; the text itself is never rewritten. In the world, M cycles compact/expanded/hidden session exploration; Shift+M toggles optional WEB LINKS/HISTORY; reader M stays the listing. The map yields to actionable door disclosure, and the expanded map yields to an opened listing. WEB LINKS/HISTORY: '<' visitor history (R), '=' same-page held-response rooms, '>' current page, '*' visited and '-' unvisited links, '^' other origin; no crawl or preload. The rear-wall Return door is the same typed history return as R and names the previous page when one exists."
+            "Reader scrolling: Up/Down scroll one row and repeat while held (native key repeat; after focus loss press again). Mouse wheel scrolls 3 rows per notch; trackpad pixels accumulate smoothly; both clamp to the content and are ignored outside an open reader, in the paused menu, address entry, chooser and image viewer. Web reader keeps <pre> code blocks exactly (indentation, blank lines, case, punctuation) with passive colouring for Python, Rust, JavaScript/TypeScript, C/C++, shell, JSON and HTML/XML; other languages stay plain. Code rows show '|' at a source line start and '>' on soft-wrapped continuation rows; the text itself is never rewritten. In web rooms, M opens/closes the full-screen route map and Escape closes it before the pause menu. Shift+M independently toggles the minimap. Arrow keys pan the full-screen map. The map uses schematic preset room shapes, stable room numbers, recent traversal and the held-history Back destination; no exact position marker. File tree/link listing visibility is in Settings, not M; reader/address/menu input remains owned by those contexts. Compact minimaps yield to actionable door disclosure; the modal full-screen map covers other HUD layers. WEB LINKS/HISTORY: '<' visitor history (R), '=' same-page held-response rooms, '>' current page, '*' visited and '-' unvisited links, '^' other origin; no crawl or preload. The rear-wall Return door is the same typed history return as R and names the previous page when one exists."
         );
         println!(
             "Web feedback: green/teal Loading… reflects real pending work; R cancels. Red failure swirl lasts at most two seconds without delaying restoration; reason persists. F8 toggles exact destination/error details in the world; Up/Down scroll. Reader/address retain their controls: Escape closes that context before F8 (and before R while typing). HAIR_STATIC_WEB_FEEDBACK=1 freezes the swirl; no audio, strobe or success wait. Feedback replaces only the selected-portal preview while visible; it is attempt-owned, not tied to a mutable door slot."
         );
         println!(
-            "HAIR {}\n--url https://host/page: bounded static HTML spatial reader. L opens transient HTTPS address entry; type the literal URL, Enter loads, Backspace edits, Up/Down scroll a long entry, Escape dismisses. Address focus isolates world controls and is dismissed on focus loss. HTTPS/public DNS only; no scripts/forms/login/styles execution or recursive preload. Tab/Shift+Tab cycles destinations inside the aimed grouped doorway; E reads/follows exactly the shown destination. Door panels show the source-link title, exact ASCII address (one too long for the panel keeps its start and exact end with an omitted-character count; reader Tab shows it whole) and a labelled abstract URL-fingerprint placeholder (not a site image); no preview pages/images are fetched. Reader Tab/E selects/follows labelled HTTPS links; R returns retained visitor history or cancels; F5 refreshes; T keeps local pack vocabulary. Acquisition/pack preparation run on one background worker; unfinished/failed destinations retain last good place. Initial load retains labelled bundled entry until ready. At most 8 retained history pages, 64 link records/page, 8 fixed grouped doorway slots/page (all supported full targets retained). Optional handmade adapter/Markdown/live hosting unqualified.\n--site /selected/folder: bounded local Markdown + PNG, restart to reload.\n--pack /selected/pack.toml: local data-only pack, invalid pack falls back to office.\nWASD move; click mouse-look; E interacts with the near, aimed, visible green document or local portal (crosshair prompt). F is disabled. Hold/repeat cannot chain actions; release E to re-arm. Tab/Shift+Tab cycles eligible nearby world targets, with a subtle current-selection highlight; aim is used when no valid explicit target is selected. Reader: Tab/Shift+Tab selects actual document links, E follows supported local pages, Up/Down scroll, Escape closes; world movement/R/target cycling remain isolated. External/image/unsupported links are labelled and not followed. Tab requires physical release and repeat/duplicate presses cannot cycle. M shows/hides the informational site outline; M requires release, ignores repeat/unfocused input and preserves page/reader/selection. Collapse survives reskins and local navigation. R returns to entry outside the reader; T cycles reskins. Lost focus clears movement and actions. Theme switch retains shared scene/anchors/collision, camera pose and page/reader/target, and releases mouse.\nEscape closes address entry, then reader, then opens the paused menu (Resume, Settings, Quit; Up/Down/Tab/Shift+Tab + Enter or click; Escape backs out). Q opens the menu with Quit focused; Enter/click confirms. Settings: UI scale 100-200% for HUD/reader/address/menus (world labels unchanged), session only; small windows apply less and say so.\n--headless-smoke --smoke-output /absolute/existing/separate/directory renders three GPU images without overwriting captures; --window-smoke attempts eight native frames.\n--resource-report validates and prints resolved paths without a GPU/window.\nHAIR_RESOURCE_ROOT is an explicit absolute development/test override; otherwise use Contents/Resources beside the bundle executable. No development/cwd fallback.\nBoth smokes are finite; neither substitutes for human input playtesting.",
+            "HAIR {}\n--url https://host/page: bounded static HTML spatial reader. L opens transient HTTPS address entry; type the literal URL, Enter loads, Backspace edits, Up/Down scroll a long entry, Escape dismisses. Address focus isolates world controls and is dismissed on focus loss. HTTPS/public DNS only; no scripts/forms/login/styles execution or recursive preload. Tab/Shift+Tab cycles destinations inside the aimed grouped doorway; E reads/follows exactly the shown destination. Door panels show the source-link title, exact ASCII address (one too long for the panel keeps its start and exact end with an omitted-character count; reader Tab shows it whole) and a labelled abstract URL-fingerprint placeholder (not a site image); no preview pages/images are fetched. Reader Tab/E selects/follows labelled HTTPS links; R returns retained visitor history or cancels; F5 refreshes; Settings > Appearance selects local pack vocabulary. Acquisition/pack preparation run on one background worker; unfinished/failed destinations retain last good place. Initial load retains labelled bundled entry until ready. At most 8 retained history pages, 64 link records/page, 8 fixed grouped doorway slots/page (all supported full targets retained). Optional handmade adapter/Markdown/live hosting unqualified.\n--site /selected/folder: bounded local Markdown + PNG, restart to reload.\n--pack /selected/pack.toml: local data-only pack, invalid pack falls back to office.\nWASD move; click mouse-look; E interacts with the near, aimed, visible green document or local portal (crosshair prompt). F is disabled. Hold/repeat cannot chain actions; release E to re-arm. Tab/Shift+Tab cycles eligible nearby world targets, with a subtle current-selection highlight; aim is used when no valid explicit target is selected. Reader: Tab/Shift+Tab selects actual document links, E follows supported local pages, Up/Down scroll, Escape closes; world movement/R/target cycling remain isolated. External/image/unsupported links are labelled and not followed. Tab requires physical release and repeat/duplicate presses cannot cycle. M shows/hides the informational site outline; M requires release, ignores repeat/unfocused input and preserves page/reader/selection. Collapse survives reskins and local navigation. R returns to entry outside the reader; Settings > Appearance selects reskins. Lost focus clears movement and actions. Theme switch retains shared scene/anchors/collision, camera pose and page/reader/target, and releases mouse.\nEscape closes address entry, then reader, then opens the paused menu (Resume, Settings, Quit; Up/Down/Tab/Shift+Tab + Enter or click; Escape backs out). Q opens the menu with Quit focused; Enter/click confirms. Settings: UI scale 100-200% for HUD/reader/address/menus (world labels unchanged), session only; small windows apply less and say so.\n--headless-smoke --smoke-output /absolute/existing/separate/directory renders three GPU images without overwriting captures; --window-smoke attempts eight native frames.\n--resource-report validates and prints resolved paths without a GPU/window.\nHAIR_RESOURCE_ROOT is an explicit absolute development/test override; otherwise use Contents/Resources beside the bundle executable. No development/cwd fallback.\nBoth smokes are finite; neither substitutes for human input playtesting.",
             env!("CARGO_PKG_VERSION")
         );
         println!(
-            "--folder PATH: native read-only folder explorer; --resource-report lists the immediate snapshot (cap {}). Ordinary launch is bundled DEMO, no folder selected: press O for the macOS directory chooser. Folder keys: E inspect/enter aimed object; I full source metadata (or current directory); U Parent beyond start; R visited Back; F5 refresh; physical Next/Previous doors continue the SAME directory; PgUp/PgDn remain optional; M local-name outline; T appearance; hold Shift to run. Rear Parent/entry, front subfolders, side continuation doors, files in the middle. Reader: Left/Right 4096-byte chunks, V text/raw, I metadata/body, C retry SAME handle from zero, Up/Down scroll, Escape close; no world/directory/link actions. Regular-file stored bytes and supported UTF-8 interpretation regardless of extension; static bounded 8-bit PNG E-viewer recognized from bytes on one background worker (4 MiB encoded, 1024 axes). V image/raw/text, I source/body, Escape close; other files retain raw/text. No playback, decryption or execution. L inactive in folder mode. No before-E image/media/model/PDF preview in this slice. ~ marks shortened HUD labels; I opens scrollable exact escaped OS names/paths. --folder INPUT --folder-flow-proof --smoke-output ABS_EXISTING_EMPTY_OUTPUT runs the shared production adapter and renderer with synthetic input, NOT native-human input.",
+            "--folder PATH: native read-only folder explorer; --resource-report lists the immediate snapshot (cap {}). Ordinary launch is bundled DEMO, no folder selected: press O for the macOS directory chooser. Folder keys: E inspect/enter aimed object; I full source metadata (or current directory); U Parent beyond start; R visited Back; F5 refresh; physical Next/Previous doors continue the SAME directory; PgUp/PgDn remain optional; M full-screen directory map; Shift+M minimap; listing in Settings; Settings > Appearance for packs; B inventory; X collects an owned file copy; hold Shift to run. Rear Parent/entry, front subfolders, side continuation doors, files in the middle. Reader: Left/Right 4096-byte chunks, V text/raw, I metadata/body, C retry SAME handle from zero, Up/Down scroll, Escape close; no world/directory/link actions. Regular-file stored bytes and supported UTF-8 interpretation regardless of extension; static bounded 8-bit PNG E-viewer recognized from bytes on one background worker (4 MiB encoded, 1024 axes). V image/raw/text, I source/body, Escape close; other files retain raw/text. No playback, decryption or execution. L inactive in folder mode. No before-E image/media/model/PDF preview in this slice. ~ marks shortened HUD labels; I opens scrollable exact escaped OS names/paths. --folder INPUT --folder-flow-proof --smoke-output ABS_EXISTING_EMPTY_OUTPUT runs the shared production adapter and renderer with synthetic input, NOT native-human input.",
             hair::local_explorer::MAX_ENTRIES
         );
         return Ok(());
@@ -344,6 +363,9 @@ fn run() -> Result<()> {
     let smoke = args.first().is_some_and(|s| s == "--window-smoke");
     let events = EventLoop::new().map_err(|e| format!("native event loop: {e}"))?;
     let mut app = App::new(root, themes, theme_index, world, smoke);
+    if !smoke {
+        app.restore_native_preferences();
+    }
     if let Some(folder) = folder_arg {
         app.complete_folder(Ok(Some(folder)))?;
     }
@@ -355,9 +377,14 @@ fn run() -> Result<()> {
         .run_app(&mut app)
         .map_err(|e| format!("native run: {e}"));
     // Blocking retirement is strictly outside all winit event handlers.
+    let mut documents_settled = app.shutdown_documents(Duration::from_millis(250));
     if let Some(web) = &mut app.web {
         web.shutdown();
     }
+    // Other post-loop retirement may allow a timed-out Documents job to finish.
+    // Harvest it without adding another wait or dropping a completed held Store.
+    if !documents_settled { documents_settled = app.shutdown_documents(Duration::ZERO); }
+    println!("DOCUMENTS_SHUTDOWN settled={documents_settled}; {}", app.local_status);
     native_result?;
     if let Some(error) = app.error {
         return Err(error);
@@ -366,8 +393,8 @@ fn run() -> Result<()> {
         return Err(format!("native smoke incomplete: {} frames", app.frames));
     }
     println!(
-        "CONTROLLED_TEARDOWN native frames={} synthetic_actions={} human_input_unverified",
-        app.frames, smoke
+        "{} native frames={} synthetic_actions={} human_input_unverified",
+        if documents_settled { "CONTROLLED_TEARDOWN" } else { "UNRESOLVED_TEARDOWN Documents; preserve evidence; see DOCUMENTS_SHUTDOWN" }, app.frames, smoke
     );
     Ok(())
 }
@@ -542,6 +569,8 @@ mod local_text_excerpt_tests;
 #[cfg(test)]
 mod local_video_still_tests;
 #[cfg(test)]
+mod player_app_tests;
+#[cfg(test)]
 mod presentation_menu_tests;
 #[cfg(test)]
 mod raw_reader_first_regression;
@@ -553,6 +582,10 @@ mod reader_scroll_tests;
 mod sprint_tests;
 
 mod exploration_native;
+mod place_mode_native;
+mod placement_editor_native;
+mod place_decoration_native;
+mod recovery_native;
 struct App {
     audio: folder_native::audio::Controller,
     images: folder_native::image::Runtime,
@@ -563,18 +596,39 @@ struct App {
     chooser_pending: bool,
     chooser_active: bool,
     web: Option<web_native::Runtime>,
+    directory_map: std::sync::Arc<hair::directory_map::Map>,
+    map_selection: Option<hair::directory_map::Confirmation>,
+    map_mouse_held: bool,
+    sidebar_snapshot: Option<std::sync::Arc<hair::local_explorer::Snapshot>>,
+    sidebar_offset: usize,
+    sidebar_wheel: f64,
+    sidebar_press: Option<(
+        usize,
+        std::sync::Arc<hair::local_explorer::Snapshot>,
+        hair::sidebar::Frame,
+    )>,
+    map_history_offset: usize,
+    map_confirm_travel: bool,
+    map_confirm_ready_at: Instant,
     exploration: std::sync::Arc<hair::exploration::Map>,
     map_mode: hair::exploration::MapMode,
+    minimap_enabled: bool,
+    route_pan: [i32; 2],
     web_completion: web_native::FeedbackRecord,
     web_details: bool,
     web_detail_scroll: usize,
     web_details_held: bool,
     static_web_feedback: bool,
     root: PathBuf,
+    // Acquired once from the actual bootstrap resource root. Never rebound by
+    // reopening a display pathname during preview or locked publication.
+    resources_directory: Result<hair::local_explorer::Explorer>,
     themes: Vec<hair::theme::Theme>,
     theme_index: usize,
     world: World,
     pose: Pose,
+    player: hair::player::Player,
+    jump_held: bool,
     input: Input,
     window: Option<Arc<Window>>,
     surface: Option<wgpu::Surface<'static>>,
@@ -602,8 +656,22 @@ struct App {
     menu: Option<hair::presentation::Menu>,
     /// Keys seen down while the menu was open stay inert until physical release.
     menu_held: folder_native::Held,
-    /// Session-only requested screen-space UI scale percentage.
+    /// Visitor presentation state, never part of a public world/host schema.
     ui_scale: u16,
+    fog: hair::fog::Fog,
+    preferences: Option<hair::acquisition::PreferenceFile>,
+    storage: storage_native::State,
+    appearance: hair::appearance::Policy,
+    inventory: hair::inventory::Inventory,
+    inventory_open: bool,
+    placement_action: Option<placement_native::Action>,
+    place_mode: Option<place_mode_native::Mode>,
+    place_p_held: bool,
+    recovery_enter_held: bool,
+    inventory_selection: usize,
+    inventory_yaw: f32,
+    inventory_drag: hair::inventory_pointer::Drag,
+    collection_feedback: Option<(Instant, hair::collection::Effect)>,
     /// Last physical pointer position inside the window.
     cursor: Option<[f64; 2]>,
     /// Up/Down repeats suppressed until a fresh press (set by focus loss).
@@ -616,9 +684,10 @@ impl App {
         root: PathBuf,
         themes: Vec<hair::theme::Theme>,
         theme_index: usize,
-        world: World,
+        mut world: World,
         smoke: bool,
     ) -> Self {
+        world.tree_collapsed = true;
         let mut pose = Pose::default();
         themes[theme_index].respawn(&mut pose);
         if let (Some(spaces), Some(site)) = (&world.spaces, &world.site) {
@@ -650,8 +719,20 @@ impl App {
             chooser_pending: false,
             chooser_active: false,
             web: None,
+            directory_map: Default::default(),
+            map_selection: None,
+            map_mouse_held: false,
+            sidebar_snapshot: None,
+            sidebar_offset: 0,
+            sidebar_wheel: 0.0,
+            sidebar_press: None,
+            map_history_offset: 0,
+            map_confirm_travel: false,
+            map_confirm_ready_at: Instant::now(),
             exploration: std::sync::Arc::new(exploration),
             map_mode: Default::default(),
+            minimap_enabled: true,
+            route_pan: [0, 0],
             web_completion: Default::default(),
             web_details: false,
             web_detail_scroll: 0,
@@ -659,11 +740,14 @@ impl App {
             // Explicit process-local static alternative; never reads publisher settings.
             static_web_feedback: std::env::var_os("HAIR_STATIC_WEB_FEEDBACK")
                 .is_some_and(|s| s == "1"),
+            resources_directory: hair::local_explorer::Explorer::new(&root),
             root,
             themes,
             theme_index,
             world,
             pose,
+            player: Default::default(),
+            jump_held: false,
             input: Input::default(),
             window: None,
             surface: None,
@@ -689,6 +773,20 @@ impl App {
             menu: None,
             menu_held: Default::default(),
             ui_scale: 100,
+            fog: Default::default(),
+            preferences: None,
+            storage: Default::default(),
+            appearance: Default::default(),
+            inventory: Default::default(),
+            inventory_open: false,
+            placement_action: None,
+            place_mode: None,
+            place_p_held: false,
+            recovery_enter_held: false,
+            inventory_selection: 0,
+            inventory_yaw: 0.0,
+            inventory_drag: Default::default(),
+            collection_feedback: None,
             cursor: None,
             reader_arrows_suppressed: [false; 2],
             wheel_rows: 0.0,
@@ -718,6 +816,7 @@ impl App {
         self.world.current_space = space.into();
         self.world.current = page.into();
         self.pose = pose;
+        self.player = Default::default();
         self.world.reading = false;
         self.world.reader_link = None;
         self.world.explicit_target = None;
@@ -846,6 +945,7 @@ impl App {
         // Failed/unsupported follows keep the reader open and never enter arrival.
         if self.world.current != before || (was_reading && !self.world.reading) {
             self.themes[self.theme_index].respawn(&mut self.pose);
+            self.player = Default::default();
             if let Some(renderer) = &mut self.renderer {
                 renderer.set_scene(&self.themes[self.theme_index].vertices_for(&self.world));
             }
@@ -883,18 +983,133 @@ impl App {
             self.static_web_feedback,
         )
     }
+    fn inventory_overlay_for(&self, size: [u32; 2]) -> Option<Vec<hair::assets::Vertex>> {
+        if self.storage.removal.is_some() { return Some(self.storage_panel(size)); }
+        self.inventory_open.then(|| {
+            let shape = self
+                .inventory
+                .items()
+                .get(self.inventory_selection)
+                .and_then(|item| self.inventory.preview(item.id))
+                .map(|preview| preview.model.vertices.as_slice())
+                .unwrap_or(&[]);
+            let state = if self.inventory.is_busy() {
+                    if self.document_activity().starts_with("Cancelling") { hair::inventory_ui::DocumentsState::PersistentCancelling }
+                    else { hair::inventory_ui::DocumentsState::PersistentLoading }
+                } else if self.documents_active() { hair::inventory_ui::DocumentsState::Persistent }
+                else if self.storage.required { hair::inventory_ui::DocumentsState::RequiredButUnavailable }
+                else { hair::inventory_ui::DocumentsState::SessionOnlyFixture };
+            let selected = self.inventory.items().get(self.inventory_selection);
+            hair::inventory_ui::overlay_documents(
+                if self.storage.cache_blocked { &[] } else { self.inventory.items() },
+                self.inventory_yaw,
+                hair::sidebar::Frame::new(size, self.ui_scale, false).full,
+                shape,
+                hair::inventory_ui::Presentation {
+                    state,
+                    selection: selected.map(|_| self.inventory_selection),
+                    representative: selected.is_some_and(|item| self.inventory.preview(item.id).is_none_or(|p| !p.content_derived || p.warning.is_some())),
+                },
+            )
+        })
+    }
     fn update_hud(&mut self) {
         let image_visible = self.local_image_visible();
         let visual = self.web_visual_at(Instant::now());
-        let context_owned = self.world.reading || self.address.is_some();
+        let context_owned = self.world.reading || self.address.is_some() || self.inventory_open;
+        let map_hover = self.directory_map_action(self.cursor);
+        let sidebar_hover = self.sidebar_hit(self.cursor);
+        let sidebar_enabled = self.sidebar_frame().left > 0;
+        let collection_overlay = self.collection_ui_at(Instant::now());
+        let mut placement_overlay = self.placement_ui();
+        placement_overlay.extend(self.place_ui());
+        let (editor_preview, editor_textures) = self.editor_render();
+        if let Some((at, effect)) = self.place_mode.as_ref().and_then(|m| m.pickup.as_ref()) {
+            let frame = self.inventory_frame();
+            let target = [1. - 320. / frame.full[0] as f32, 1. - 296. / frame.full[1] as f32];
+            placement_overlay.extend(effect.paint_to(at.elapsed().as_secs_f32(), false, target));
+        }
+        let inventory_overlay = self
+            .renderer
+            .as_ref()
+            .and_then(|r| self.inventory_overlay_for(r.size));
+        let decoration_footer = self.decoration_footer();
+        let storage_overlay = self.renderer.as_ref().and_then(|r| {
+            self.menu.is_some_and(|m| m.view == hair::presentation::View::Storage).then(|| self.storage_panel(r.size))
+        });
+        if let Some(window) = &self.window {
+            window.set_cursor(if map_hover.is_some() || sidebar_hover.is_some() {
+                winit::window::CursorIcon::Pointer
+            } else {
+                winit::window::CursorIcon::Default
+            });
+        }
+        let item_textures = if self.editor_held() && self.place_context() {
+            editor_textures
+        } else if self.inventory_open {
+            self.inventory
+                .items()
+                .get(self.inventory_selection)
+                .and_then(|item| self.inventory.preview(item.id))
+                .map(|p| p.model.textures.clone())
+                .unwrap_or_default()
+        } else {
+            self.collection_feedback
+                .as_ref()
+                .map(|(_, effect)| effect.textures.clone())
+                .unwrap_or_default()
+        };
         if let Some(renderer) = &mut self.renderer {
+            if let Err(e) = renderer.set_item_materials(&item_textures) {
+                self.local_status = format!("Inventory preview refused: {e}");
+                renderer.editor_preview.clear();
+            } else {
+                renderer.editor_preview = editor_preview;
+            }
             renderer.ui_scale = self.ui_scale;
+            renderer.set_fog(self.fog);
             renderer.menu = self.menu;
-            renderer.exploration = (self.web.is_some()
+            renderer.storage_overlay = storage_overlay;
+            renderer.collection_overlay = collection_overlay;
+            renderer.placement_overlay = placement_overlay;
+            renderer.appearance_policy = self.appearance.clone();
+            let next = &self.themes[(self.theme_index + 1) % self.themes.len()];
+            renderer.appearance_name = if next.unavailable_reason().is_some() {
+                format!("NEXT UNAVAILABLE: {}", next.name)
+            } else {
+                self.themes[self.theme_index].name.clone()
+            };
+            renderer.inventory_overlay = inventory_overlay;
+            renderer.route_pan = self.route_pan;
+            renderer.route_back = self.web.as_ref().and_then(|w| w.back_room_id());
+            renderer.map_selection = self.map_selection.clone();
+            renderer.map_history_offset = self.map_history_offset;
+            renderer.map_confirm_travel = self.map_confirm_travel;
+            renderer.map_hover = map_hover;
+            renderer.sidebar_snapshot = if self.local.is_some() {
+                self.sidebar_snapshot.clone()
+            } else {
+                None
+            };
+            renderer.sidebar_enabled = sidebar_enabled;
+            renderer.sidebar_offset = self.sidebar_offset;
+            renderer.sidebar_hover = sidebar_hover;
+            renderer.directory_map = (self.place_mode.is_none()
+                && self.local.is_some()
+                && !self.world.reading
+                && self.address.is_none()
+                && self.menu.is_none()
+                && !self.inventory_open
+                && self.placement_action.is_none())
+            .then(|| (self.directory_map.clone(), self.map_mode));
+            renderer.exploration = (self.place_mode.is_none()
+                && self.web.is_some()
                 && self.world.pocket.is_some()
                 && !self.world.reading
                 && self.address.is_none()
-                && self.menu.is_none())
+                && self.menu.is_none()
+                && !self.inventory_open
+                && self.placement_action.is_none())
             .then(|| (self.exploration.clone(), self.map_mode));
             renderer.set_web_feedback(&visual, context_owned);
             renderer.viewer_visible = image_visible;
@@ -907,9 +1122,11 @@ impl App {
                     self.address_scroll,
                 )
             });
-            renderer.pack_feedback = if let Some(view) = &self.world.folder_view {
+            renderer.pack_feedback = if let Some(footer) = decoration_footer {
+                footer
+            } else if let Some(view) = &self.world.folder_view {
                 format!(
-                    "{} | {}\nU Parent | R Back | F5 refresh | I source\n{}",
+                    "{} | {}\nU Parent | R Back | F5 refresh | I source | P Place Mode\n{}",
                     view.summary(),
                     self.themes[self.theme_index].name,
                     self.local_status
@@ -943,6 +1160,7 @@ impl App {
         text: Option<&str>,
     ) -> Result<bool> {
         // Physical Space release survives address-entry and reader-mode routing.
+        if self.storage_text_input(code, down, repeat, text) { return Ok(false); }
         if code == Some(KeyCode::Space) {
             if !down {
                 self.local_held.remove(&KeyCode::Space);
@@ -995,9 +1213,155 @@ impl App {
     // The native event path and deterministic executable proof use this same adapter.
     // true requests exit; rendering errors remain errors rather than swallowed actions.
     fn key(&mut self, code: KeyCode, down: bool, repeat: bool) -> Result<bool> {
+        if code == KeyCode::Escape && down && !repeat && self.focused {
+            self.cancel_documents();
+        }
+        if code == KeyCode::Enter {
+            let held = self.recovery_enter_held;
+            self.recovery_enter_held = down;
+            if self.recovery_open() && down && (held || repeat) { return Ok(false); }
+        }
+        // Track Space before every modal early return, including direct adapter
+        // callers. Context changes never turn a held key into a fresh jump.
+        if code == KeyCode::Space {
+            let fresh = down && !repeat && !self.jump_held;
+            self.jump_held = down;
+            if fresh && self.jump_owned() && self.input.captured {
+                self.player.jump();
+            }
+        }
+        if let Some(result) = self.place_key(code, down, repeat) {
+            return result;
+        }
+        if let Some(result) = self.placement_key(code, down, repeat) {
+            return result;
+        }
         // The paused menu owns every key; keys held across it stay inert until release.
         if let Some(result) = self.menu_key(code, down, repeat) {
             return result;
+        }
+        if self.inventory_open {
+            if !down {
+                self.menu_held.remove(&code);
+                self.release_latch(code);
+                return Ok(false);
+            }
+            let fresh = self.menu_held.insert(code);
+            if !self.focused || repeat || !fresh {
+                return Ok(false);
+            }
+            if self.storage.removal.is_some() {
+                match code {
+                    KeyCode::Enter | KeyCode::NumpadEnter => self.confirm_document_removal(),
+                    KeyCode::Escape | KeyCode::KeyB => { self.storage.removal = None; self.refresh_documents(); }
+                    KeyCode::PageUp => self.storage.scroll = self.storage.scroll.saturating_sub(8),
+                    KeyCode::PageDown => self.storage.scroll = self.storage.scroll.saturating_add(8),
+                    _ => {}
+                }
+                return Ok(false);
+            }
+            match code {
+                KeyCode::KeyP => {
+                    if let Err(e) = self.begin_placement() {
+                        self.local_status = format!("Placement refused: {e}");
+                    }
+                }
+                KeyCode::Escape | KeyCode::KeyB => {
+                    self.inventory_open = false;
+                    self.release_navigation();
+                }
+                KeyCode::ArrowUp => {
+                    self.inventory_drag.cancel();
+                    self.inventory_selection = self.inventory_selection.min(self.inventory.items().len()).saturating_sub(1);
+                    self.prepare_document_selection();
+                }
+                KeyCode::ArrowDown => {
+                    self.inventory_drag.cancel();
+                    self.inventory_selection = self.inventory_selection.checked_add(1).unwrap_or(0)
+                        .min(self.inventory.items().len().saturating_sub(1));
+                    self.prepare_document_selection();
+                }
+                KeyCode::Delete if self.inventory.is_persistent() => self.plan_document_removal(),
+                KeyCode::F8 => self.open_storage(),
+                KeyCode::ArrowLeft => {
+                    self.inventory_yaw =
+                        (self.inventory_yaw - 0.2).rem_euclid(std::f32::consts::TAU)
+                }
+                KeyCode::ArrowRight => {
+                    self.inventory_yaw =
+                        (self.inventory_yaw + 0.2).rem_euclid(std::f32::consts::TAU)
+                }
+                _ => {}
+            }
+            return Ok(false);
+        }
+        if self.map_mode == hair::exploration::MapMode::Expanded {
+            if !down {
+                self.menu_held.remove(&code);
+                self.release_latch(code);
+                return Ok(false);
+            }
+            let fresh = self.menu_held.insert(code);
+            if matches!(code, KeyCode::ShiftLeft | KeyCode::ShiftRight) {
+                self.shifts[usize::from(code == KeyCode::ShiftRight)] = self.focused;
+                return Ok(false);
+            }
+            if !self.focused || repeat || !fresh {
+                return Ok(false);
+            }
+            if self.map_selection.is_some() {
+                match code {
+                    KeyCode::Escape => self.map_selection = None,
+                    KeyCode::Tab => self.map_confirm_travel = !self.map_confirm_travel,
+                    KeyCode::Enter | KeyCode::NumpadEnter => {
+                        if self.map_confirm_travel {
+                            let _ = self.directory_map_confirm();
+                        } else {
+                            self.map_selection = None;
+                        }
+                    }
+                    _ => {}
+                }
+                return Ok(false);
+            }
+            if self.local.is_some() && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight)
+            {
+                self.directory_history_scroll(code == KeyCode::BracketLeft);
+                return Ok(false);
+            }
+            let limit = if self.local.is_some() {
+                hair::directory_map::MAX_NODES as i32
+            } else {
+                24
+            };
+            match code {
+                KeyCode::ArrowLeft => self.route_pan[0] = (self.route_pan[0] - 1).max(-limit),
+                KeyCode::ArrowRight => self.route_pan[0] = (self.route_pan[0] + 1).min(limit),
+                KeyCode::ArrowUp => self.route_pan[1] = (self.route_pan[1] - 1).max(-limit),
+                KeyCode::ArrowDown => self.route_pan[1] = (self.route_pan[1] + 1).min(limit),
+                _ => {}
+            }
+            if code == KeyCode::KeyM && !self.tree_held {
+                self.tree_held = true;
+                if self.shifts.iter().any(|v| *v) {
+                    self.minimap_enabled = !self.minimap_enabled;
+                    return Ok(false);
+                }
+                self.map_mode = if self.minimap_enabled {
+                    hair::exploration::MapMode::Compact
+                } else {
+                    hair::exploration::MapMode::Hidden
+                };
+                self.release_navigation();
+            } else if code == KeyCode::Escape {
+                self.map_mode = if self.minimap_enabled {
+                    hair::exploration::MapMode::Compact
+                } else {
+                    hair::exploration::MapMode::Hidden
+                };
+                self.release_navigation();
+            }
+            return Ok(false);
         }
         // F8 is nonmodal. Track physical presses/releases in every context so a
         // key held while typing/reading cannot become a fresh world action.
@@ -1121,6 +1485,77 @@ impl App {
             }
             return Ok(false);
         }
+        if code == KeyCode::KeyB && down && !repeat && self.focused && !self.world.reading {
+            self.release_navigation();
+            self.refresh_documents();
+            self.inventory_open = true;
+            self.menu_held.insert(code);
+            return Ok(false);
+        }
+        if code == KeyCode::KeyX {
+            if !down {
+                self.local_held.remove(&code);
+            } else if self.focused && !self.world.reading && !repeat && self.local_held.insert(code)
+            {
+                if self.storage.cache_blocked || (self.storage.required && !self.inventory.is_persistent()) {
+                    self.local_status = "Not collected: persistent Documents unavailable; open Player Settings > Storage settings. No silent session fallback.".into();
+                    return Ok(false);
+                }
+                let index = hair::interaction::resolve(
+                    &self.themes[self.theme_index].host,
+                    &self.pose,
+                    &self.world,
+                )
+                .and_then(|t| {
+                    self.world
+                        .folder_view
+                        .as_ref()?
+                        .bindings
+                        .get(&t.anchor)
+                        .map(|b| (b.index, t.anchor.clone()))
+                });
+                if let (Some((index, anchor)), Some(local)) = (index, self.local.as_ref()) {
+                    self.collection_feedback = None;
+                    if self.inventory.is_persistent() {
+                        if let Err(error) = self.start_document_collect(index) { self.local_status = error; }
+                        return Ok(false);
+                    }
+                    self.local_status = match self.inventory.collect(&local.explorer, index) {
+                        Ok(id) => {
+                            self.inventory_selection = self.inventory.items().iter().position(|item| item.id == id).unwrap_or(0);
+                            self.storage.selected = Some(id);
+                            let Some(preview) = self.inventory.preview(id) else {
+                                self.local_status = "Collection committed; preview unavailable. Open Documents (B), F8 for details.".into();
+                                return Ok(false);
+                            };
+                            let model = self.themes[self.theme_index]
+                                .host
+                                .anchors
+                                .iter()
+                                .find(|a| a.id == anchor)
+                                .map(|a| hair::file_items::above_base(&preview.model.vertices, a))
+                                .unwrap_or_default();
+                            self.collection_feedback = hair::collection::Effect::new(
+                                &model,
+                                &self.pose,
+                                self.sidebar_frame(),
+                            )
+                            .map(|mut effect| {
+                                effect.textures = preview.model.textures.clone();
+                                (Instant::now(), effect)
+                            });
+                            format!(
+                                "Collected copy | INVENTORY {} items | original unchanged{}",
+                                self.inventory.items().len(),
+                                self.inventory.notice().map(|n| format!("; {n}")).unwrap_or_default()
+                            )
+                        }
+                        Err(error) => if self.inventory.is_persistent() { error } else { format!("Not collected: {error}") },
+                    };
+                }
+            }
+            return Ok(false);
+        }
         if self.local.is_some() && matches!(code, KeyCode::Escape | KeyCode::KeyT) {
             if !down {
                 self.local_held.remove(&code);
@@ -1197,14 +1632,24 @@ impl App {
                 self.tree_held = false;
             } else if self.focused && !repeat && !self.tree_held {
                 self.tree_held = true;
-                if self.web.is_some()
-                    && self.world.pocket.is_some()
+                if ((self.web.is_some() && self.world.pocket.is_some()) || self.local.is_some())
                     && !self.world.reading
-                    && !self.shifts.iter().any(|held| *held)
                 {
-                    self.map_mode.cycle();
-                } else {
-                    self.world.tree_collapsed = !self.world.tree_collapsed;
+                    if self.shifts.iter().any(|held| *held) {
+                        self.minimap_enabled = !self.minimap_enabled;
+                        self.map_mode = if self.minimap_enabled {
+                            hair::exploration::MapMode::Compact
+                        } else {
+                            hair::exploration::MapMode::Hidden
+                        };
+                    } else {
+                        self.map_mode = hair::exploration::MapMode::Expanded;
+                        self.map_selection = None;
+                        self.map_history_offset = 0;
+                        self.route_pan = [0, 0];
+                        self.release_navigation();
+                        self.world.explicit_target = None;
+                    }
                 }
             }
             return Ok(false);
@@ -1293,26 +1738,18 @@ impl App {
                         self.object_previews.room(view);
                     }
                     self.release();
+                } else if self.input.captured {
+                    // Unlocking is its own action. menu_held consumes repeats
+                    // (including duplicate non-repeat downs) until release.
+                    self.release_navigation();
+                    self.menu_held.insert(code);
                 } else {
-                    // World Escape pauses; quitting is an explicit menu choice.
+                    // Only a fresh Escape with a free pointer opens the menu.
                     self.open_menu(hair::presentation::Menu::pause(), code);
                 }
             }
             KeyCode::KeyQ => {
                 self.open_menu(hair::presentation::Menu::quit_confirm(), code);
-            }
-            KeyCode::KeyT => {
-                // Appearance changes release movement/capture, not audio intent.
-                self.release_navigation();
-                if let Some(renderer) = &mut self.renderer {
-                    switch_theme(
-                        &self.themes,
-                        &mut self.theme_index,
-                        &mut self.pose,
-                        renderer,
-                        &self.world,
-                    )?;
-                }
             }
             KeyCode::KeyR => {
                 if let Some(g) = &self.world.spaces {
@@ -1328,6 +1765,7 @@ impl App {
                 }
                 self.world.return_to_entry();
                 self.themes[self.theme_index].respawn(&mut self.pose);
+                self.player = Default::default();
                 self.scroll = 0;
                 self.wheel_rows = 0.0;
                 if let Some(renderer) = &mut self.renderer {
@@ -1350,6 +1788,9 @@ impl App {
     /// Lines scroll three rows; pixels accumulate against the drawn row pitch.
     /// World, menu, address, chooser, focus loss and image viewing never scroll.
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if self.sidebar_scroll(delta) {
+            return;
+        }
         const WHEEL_ROWS_BOUND: f64 = 4096.0;
         if !self.focused
             || !self.world.reading
@@ -1391,6 +1832,13 @@ impl App {
     fn focus_changed(&mut self, focused: bool) {
         self.focused = focused;
         if !focused {
+            self.cancel_documents(); // Explicit existing focus-loss contract.
+            self.storage.chooser = false;
+            self.place_p_held = false;
+            self.sidebar_press = None;
+            self.sidebar_wheel = 0.0;
+            self.map_selection = None;
+            self.map_mouse_held = true;
             self.reader_arrows_suppressed = [true; 2];
             self.wheel_rows = 0.0;
             self.local_held.clear();
@@ -1422,13 +1870,49 @@ impl App {
         }
     }
     fn release(&mut self) {
+        self.place_mode = None;
+        self.place_scene_refresh();
         // Safety releases (focus/address/chooser/exit) also cancel audio intent.
         // No device calls here: redraw retires output; App-owned Controller Drop
         // performs final synchronous disposal/join when no more redraw is possible.
         self.stop_local_audio();
         self.release_navigation();
     }
+    fn capture_look(&mut self) {
+        self.input.release();
+        self.shifts = [false; 2];
+        self.sidebar_press = None;
+        if let Some(window) = &self.window {
+            match window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+            {
+                Ok(()) => {
+                    self.input.captured = true;
+                    window.set_cursor_visible(false);
+                }
+                Err(e) => {
+                    self.local_status =
+                        format!("Mouse capture unavailable: {e}; use toolbox or Escape")
+                }
+            }
+        }
+        #[cfg(test)]
+        if self.window.is_none() {
+            self.input.captured = true;
+        }
+    }
     fn release_navigation(&mut self) {
+        // Input ownership only: changing UI is not consent to cancel disk work.
+        if let Some(mode) = &mut self.place_mode {
+            mode.edit = None;
+        }
+        self.player.velocity = 0.0;
+        self.inventory_drag.cancel();
+        self.placement_action = None;
+        self.collection_feedback = None;
+        self.sidebar_press = None;
+        self.sidebar_wheel = 0.0;
         self.input.release();
         self.shifts = [false; 2];
         if let Some(window) = &self.window {
@@ -1494,7 +1978,42 @@ impl App {
         }
         Ok(())
     }
+    fn advance_motion(&mut self, dt: f32) {
+        hair::player::fit_camera(&self.themes[self.theme_index].host, &mut self.pose);
+        if self.motion_owned() {
+            self.player.advance(
+                &self.themes[self.theme_index].host,
+                &mut self.pose,
+                &self.input,
+                dt,
+            );
+        }
+    }
+    fn motion_owned(&self) -> bool {
+        self.focused
+            && !self.recovery_open()
+            && !(self.editor_held() && self.editor_phase() != "Positioning")
+            && !self
+                .place_mode
+                .as_ref()
+                .is_some_and(|m| m.edit.as_ref().is_some_and(|e| e.confirming()))
+            && !self.world.reading
+            && self.menu.is_none()
+            && !self.inventory_open
+            && self.address.is_none()
+            && !self
+                .placement_action
+                .as_ref()
+                .is_some_and(|a| a.pending.is_some())
+            && !self.chooser_active
+            && !self.chooser_pending
+            && self.map_mode != hair::exploration::MapMode::Expanded
+    }
+    fn jump_owned(&self) -> bool {
+        self.motion_owned() && self.placement_action.is_none() && self.place_mode.is_none()
+    }
     fn redraw(&mut self, events: &ActiveEventLoop) -> Result<()> {
+        self.poll_documents();
         self.poll_web()?;
         self.poll_local_image()?;
         if let (Some(window), Some(web)) = (&self.window, &self.web) {
@@ -1505,9 +2024,7 @@ impl App {
         }
         let dt = self.previous.elapsed().as_secs_f32();
         self.previous = Instant::now();
-        if !self.world.reading && self.menu.is_none() {
-            self.themes[self.theme_index].locomote(&mut self.pose, &self.input, dt);
-        }
+        self.advance_motion(dt);
         if self.smoke {
             match self.frames {
                 2 => {
@@ -1530,10 +2047,13 @@ impl App {
             &mut self.world,
             self.web.as_ref().map_or(&[], |w| w.window_doors.as_slice()),
         );
-        if old_target != self.world.interaction
-            && let Some(renderer) = &mut self.renderer
-        {
-            renderer.set_scene(&self.themes[self.theme_index].vertices_for(&self.world));
+        // Only the active visible room spends render-only animation work. No
+        // acquisition, host mutation or filesystem reconciliation occurs here.
+        let animate_files = self.focused
+            && self.place_context()
+            && self.themes[self.theme_index].has_file_animation(&self.world);
+        if old_target != self.world.interaction || animate_files {
+            self.place_scene_refresh();
         }
         self.update_hud();
         let surface = self.surface.as_ref().ok_or("missing surface")?;
@@ -1574,6 +2094,12 @@ impl App {
             .pre_present_notify();
         renderer.queue.present(frame);
         self.frames += 1;
+        if self.claim_storage_request() {
+            let selection = folder_dialog::present_storage();
+            self.complete_storage_selection(selection);
+            self.previous = Instant::now();
+            return Ok(());
+        }
         if self.claim_folder_request() {
             let selection = folder_dialog::present();
             if let Err(error) = self.complete_folder(selection) {
@@ -1609,6 +2135,12 @@ impl ApplicationHandler for App {
             WindowEvent::Occluded(value) => println!("NATIVE_OCCLUDED={value}"),
             WindowEvent::Focused(focused) => self.focus_changed(focused),
             WindowEvent::Resized(size) => {
+                if let Some(mode) = &mut self.place_mode {
+                    mode.cancel_pointer();
+                }
+                self.inventory_drag.cancel();
+                self.sidebar_press = None;
+                self.sidebar_wheel = 0.0;
                 if size.width > 0
                     && size.height > 0
                     && let (Some(renderer), Some(surface), Some(config)) =
@@ -1621,10 +2153,44 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = Some([position.x, position.y]);
+                self.pointer_moved(Some([position.x, position.y]));
             }
-            WindowEvent::CursorLeft { .. } => self.cursor = None,
+            WindowEvent::CursorLeft { .. } => self.pointer_moved(None),
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if self.place_mode.is_some() && self.place_context() => {
+                self.place_pointer(state == ElementState::Pressed);
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if self.inventory_open => {
+                self.inventory_pointer(state == ElementState::Pressed);
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if self.map_mode == hair::exploration::MapMode::Expanded && self.local.is_some() => {
+                self.directory_map_pointer(self.cursor, state == ElementState::Pressed);
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.map_mouse_held = false;
+                self.sidebar_pointer(false, self.cursor);
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state: ElementState::Pressed,
+                ..
+            } if self.sidebar_pointer(true, self.cursor) => {}
             // The open menu owns clicks: physical pointer hit-tests the rendered
             // buttons; it never captures the cursor (Resume waits for a fresh click).
             WindowEvent::MouseInput {
@@ -1646,12 +2212,15 @@ impl ApplicationHandler for App {
             } if self.focused
                 && self.address.is_none()
                 && self.menu.is_none()
+                && !self.inventory_open
+                && self.map_mode != hair::exploration::MapMode::Expanded
                 && !self.world.reading
                 && !self.smoke
                 && !self.chooser_pending
                 && !self.chooser_active =>
             {
                 if let Some(window) = &self.window {
+                    self.map_mouse_held = true;
                     match window
                         .set_cursor_grab(CursorGrabMode::Locked)
                         .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
@@ -1698,8 +2267,10 @@ impl ApplicationHandler for App {
     ) {
         if let DeviceEvent::MouseMotion { delta } = event
             && self.focused
+            && self.map_mode != hair::exploration::MapMode::Expanded
             && !self.world.reading
             && self.menu.is_none()
+            && !self.inventory_open
         {
             self.input.look(&mut self.pose, delta.0, delta.1);
         }
@@ -1723,6 +2294,7 @@ impl ApplicationHandler for App {
         ));
     }
     fn exiting(&mut self, _events: &ActiveEventLoop) {
+        self.cancel_documents(); // Nonblocking request; post-loop helper settles.
         self.discard_local_reader();
         self.release();
         if let Some(renderer) = &self.renderer
@@ -1758,6 +2330,8 @@ mod navigation_tests {
     fn unified_e_enters_near_aimed_portal() {
         let (theme, mut world) = fixture();
         let pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, -3.0],
             yaw: 0.0,
             pitch: -0.1,
@@ -1779,6 +2353,8 @@ mod navigation_tests {
             false,
         );
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 1.8],
             yaw: 0.0,
             pitch: -0.5,
@@ -1807,6 +2383,8 @@ mod navigation_tests {
             false,
         );
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, -3.0],
             yaw: 0.0,
             pitch: -0.1,
@@ -1864,6 +2442,8 @@ mod navigation_tests {
         app.key(KeyCode::Escape, true, false).unwrap();
         assert!(!app.world.reading);
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 1.8],
             yaw: 0.0,
             pitch: -0.5,
@@ -1888,6 +2468,8 @@ mod navigation_tests {
             false,
         );
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, -3.0],
             yaw: 0.0,
             pitch: -0.1,
@@ -1946,6 +2528,8 @@ mod navigation_tests {
             );
         };
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 1.8],
             yaw: 0.0,
             pitch: -0.5,
@@ -1971,6 +2555,8 @@ mod navigation_tests {
         app.focus_changed(true);
         app.key(KeyCode::KeyE, false, false).unwrap();
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, -3.0],
             yaw: 0.0,
             pitch: -0.1,
@@ -2043,6 +2629,8 @@ mod navigation_tests {
     fn unified_e_refuses_document_behind_camera() {
         let (theme, mut world) = fixture();
         let pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 1.8],
             yaw: std::f32::consts::PI,
             pitch: -0.4,

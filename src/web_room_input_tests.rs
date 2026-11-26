@@ -30,6 +30,8 @@ fn physical_next_e_activates_same_response_second_room() {
         .unwrap();
     let inward = host.portal_inward(&door.id);
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [door.at[0] + inward[0] * 1.0, door.at[2] + inward[1] * 1.0],
         yaw: (-inward[0]).atan2(inward[1]),
         pitch: -0.1,

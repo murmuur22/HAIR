@@ -1,4 +1,6 @@
 use crate::assets::Vertex;
+pub mod directory_map;
+mod directory_travel;
 pub mod exploration_map;
 // Informational 2x bitmap sidebar; current-centred window, no navigation actions.
 const TREE_SCALE: f32 = 2.0;
@@ -95,7 +97,89 @@ fn tree_overlay(world: &crate::World, width: u32, height: u32) -> Vec<Vertex> {
 }
 /// The panel ends above `bottom` (an aimed-door panel's top); with no room
 /// even for its header it yields to that transient panel instead of overlapping.
+pub fn sidebar_overlay(
+    snapshot: &crate::local_explorer::Snapshot,
+    frame: crate::sidebar::Frame,
+    offset: usize,
+    hover: Option<usize>,
+) -> Vec<Vertex> {
+    if frame.left == 0 {
+        return vec![];
+    }
+    let mut p = Painter {
+        vertices: vec![],
+        width: frame.full[0] as f32,
+        height: frame.full[1] as f32,
+    };
+    let w = frame.sidebar;
+    let h = frame.full[1] as f32;
+    p.rect(0.0, 0.0, w, h, [0.018, 0.032, 0.025]);
+    p.rect(w - 1.0, 0.0, 1.0, h, [0.12, 0.24, 0.16]);
+    p.text(12.0, 14.0, "EXPLORER", 2.0, [0.65, 0.9, 0.72]);
+    let columns = ((w - 28.0) / 12.0).max(1.0) as usize;
+    let name = snapshot
+        .folder
+        .file_name()
+        .unwrap_or(snapshot.folder.as_os_str());
+    let title = crate::local_explorer::escape_display(name);
+    p.literal_text(
+        12.0,
+        42.0,
+        &bounded_tail(&title, columns),
+        2.0,
+        [0.84, 0.96, 0.86],
+    );
+    p.text(12.0, 70.0, "CURRENT DIRECTORY", 1.0, [0.4, 0.6, 0.45]);
+    let list = crate::sidebar::List::new(frame, snapshot.entries.len(), offset);
+    for (i, r) in &list.rows {
+        let entry = &snapshot.entries[*i];
+        let file = entry.kind == crate::local_explorer::Kind::File;
+        let hot = file && hover == Some(*i);
+        if hot {
+            p.rect(r[0], r[1], r[2] - r[0], r[3] - r[1], [0.10, 0.24, 0.15]);
+        }
+        let prefix = match entry.kind {
+            crate::local_explorer::Kind::File => "  ",
+            crate::local_explorer::Kind::Folder => "> ",
+            _ => "- ",
+        };
+        let label = format!(
+            "{prefix}{}",
+            crate::local_explorer::escape_display(&entry.name)
+        );
+        p.literal_text(
+            12.0,
+            r[1] + 6.0,
+            &bounded_tail(&label, columns),
+            2.0,
+            if hot {
+                [0.8, 1.0, 0.85]
+            } else if file {
+                [0.65, 0.81, 0.69]
+            } else {
+                [0.4, 0.59, 0.46]
+            },
+        );
+    }
+    let end = (list.start + list.rows.len()).min(snapshot.entries.len());
+    p.text(
+        12.0,
+        h - 24.0,
+        &format!(
+            "{}-{} / {} | WHEEL",
+            if end == 0 { 0 } else { list.start + 1 },
+            end,
+            snapshot.entries.len()
+        ),
+        1.0,
+        [0.4, 0.6, 0.45],
+    );
+    p.vertices
+}
 fn tree_overlay_above(world: &crate::World, width: u32, height: u32, bottom: f32) -> Vec<Vertex> {
+    if world.folder_view.is_some() || world.tree_collapsed {
+        return vec![];
+    }
     let w = tree_width(width, height);
     if w == 0.0 {
         return Vec::new();
@@ -140,12 +224,7 @@ fn tree_overlay_above(world: &crate::World, width: u32, height: u32, bottom: f32
             TREE_HEADER_HEIGHT + count as f32 * TREE_ROW_PITCH,
             [0.012, 0.012, 0.012],
         );
-        let suffix = match (world.reading, world.tree_collapsed) {
-            (false, true) => " SHIFT M SHOW",
-            (false, false) => " SHIFT M HIDE",
-            (true, true) => " M SHOW",
-            (true, false) => " M HIDE",
-        };
+        let suffix = " SETTINGS";
         p.text(
             18.0,
             tree_top + 4.0,
@@ -179,17 +258,12 @@ fn tree_overlay_above(world: &crate::World, width: u32, height: u32, bottom: f32
         TREE_HEADER_HEIGHT + count as f32 * TREE_ROW_PITCH,
         [0.012, 0.012, 0.012],
     );
-    let suffix = match (world.tree_collapsed, cols >= 10) {
-        (true, true) => " | M SHOW",
-        (false, true) => " | M HIDE",
-        (true, false) => " M SHOW",
-        (false, false) => " M HIDE",
-    };
+    let suffix = " SETTINGS";
     let title = bounded_line(&world.navigation.title, cols.saturating_sub(suffix.len()));
     p.text(
         18.0,
         tree_top + 4.0,
-        &format!("{title}{suffix}"),
+        &bounded_line(&format!("{title}{suffix}"), cols),
         TREE_SCALE,
         [0.8, 0.8, 0.8],
     );
@@ -320,17 +394,14 @@ fn reader_layout(world: &crate::World, width: u32, height: u32) -> ReaderLayout 
         1.0
     };
     let tree = tree_width(width, height);
-    let sidebar = if tree > 0.0 && world.reading && !world.tree_collapsed {
-        tree + 12.0
-    } else {
-        0.0
-    };
+    let sidebar =
+        if world.folder_view.is_none() && tree > 0.0 && world.reading && !world.tree_collapsed {
+            tree + 12.0
+        } else {
+            0.0
+        };
     let columns = ((width as f32 - sidebar - 48.0) / (6.0 * scale)).max(1.0) as usize;
-    let document_y = if world.tree_collapsed && tree > 0.0 {
-        TREE_TOP + TREE_HEADER_HEIGHT + 8.0
-    } else {
-        80.0
-    };
+    let document_y = 80.0;
     let rows = ((height as f32 - document_y - 84.0) / (9.0 * scale)).max(1.0) as usize;
     ReaderLayout {
         scale,
@@ -590,15 +661,15 @@ pub fn overlay_with_web_feedback(
         if world.folder_view.is_some() && world.reading {
             "READ-ONLY LOCAL | ~ TRUNCATED | EXACT SOURCE ABOVE | ASCII GLYPH FALLBACK"
         } else if world.folder_view.is_some() {
-            "WASD | CLICK LOOK | E INSPECT/ENTER | I SOURCE | O CHOOSE | T PACK | M TREE"
+            "WASD | CLICK LOOK | E INSPECT/ENTER | I SOURCE | O CHOOSE | B INVENTORY | ESC SETTINGS"
         } else if world.reading && web {
             "STATIC HTML | ~ = TRUNCATED | EXACT SOURCE BELOW; UP/DOWN/WHEEL TO INSPECT"
         } else if world.reading {
             "LOCAL MARKDOWN | ASCII READER"
         } else if web {
-            "WASD | CLICK LOOK | T PACK | M MAP | SHIFT M LINKS | ~ READ FOR FULL ADDRESS"
+            "WASD | CLICK LOOK | B INVENTORY | M MAP | SHIFT M MINIMAP | ~ READ FOR FULL ADDRESS"
         } else {
-            "WASD | CLICK LOOK | E INTERACT | TAB/SHIFT TAB TARGET | T THEME"
+            "WASD | CLICK LOOK | E INTERACT | TAB/SHIFT TAB TARGET | B INVENTORY | ESC SETTINGS"
         },
         1.0,
         [0.9, 0.95, 0.9],
@@ -682,9 +753,9 @@ pub fn overlay_with_web_feedback(
             if world.folder_view.is_some() {
                 "LEFT/RIGHT CHUNK | V TEXT/RAW | I METADATA/BODY | C RETRY | LINKS INACTIVE"
             } else if world.pocket.as_ref().is_some_and(|p| p.reading.is_some()) {
-                "ESC CLOSE COLLECTION | T PACK | L ADDRESS"
+                "ESC CLOSE COLLECTION | PACK: SETTINGS | L ADDRESS"
             } else {
-                "TAB/SHIFT TAB LINK | E FOLLOW | T PACK | L ADDRESS | WHEEL/HELD UP-DOWN | M MAP"
+                "TAB/SHIFT TAB LINK | E FOLLOW | PACK: SETTINGS | L ADDRESS | WHEEL/HELD UP-DOWN | ESC WORLD"
             },
             1.0,
             [0.6, 0.9, 0.7],
@@ -1610,6 +1681,50 @@ fn glyph(c: char) -> [u8; 7] {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn current_hud_controls_point_to_inventory_and_settings_not_theme_key() {
+        let assert_help = |world: &crate::World, help: &str| {
+            let output = super::overlay(world, 640, 480, 0);
+            let mut p = super::Painter {
+                vertices: vec![],
+                width: 640.0,
+                height: 480.0,
+            };
+            p.text(12.0, 28.0, help, 1.0, [0.9, 0.95, 0.9]);
+            assert!(!p.vertices.is_empty());
+            assert!(
+                p.vertices
+                    .iter()
+                    .all(|v| v.position[0].abs() <= 1.0 && v.position[1].abs() <= 1.0)
+            );
+            assert!(
+                output
+                    .windows(p.vertices.len())
+                    .any(|v| bytemuck::cast_slice::<_, u8>(v)
+                        == bytemuck::cast_slice::<_, u8>(&p.vertices))
+            );
+        };
+        let snapshot = crate::local_explorer::Snapshot {
+            folder: "synthetic-controls-fixture".into(),
+            entries: vec![],
+        };
+        let (world, _) = crate::folder_scene::build(&snapshot, 0, false).unwrap();
+        assert_help(
+            &world,
+            "WASD | CLICK LOOK | E INSPECT/ENTER | I SOURCE | O CHOOSE | B INVENTORY | ESC SETTINGS",
+        );
+        let mut world =
+            crate::World::load(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert_help(
+            &world,
+            "WASD | CLICK LOOK | E INTERACT | TAB/SHIFT TAB TARGET | B INVENTORY | ESC SETTINGS",
+        );
+        world.current = "https://example.test/controls".into();
+        assert_help(
+            &world,
+            "WASD | CLICK LOOK | B INVENTORY | M MAP | SHIFT M MINIMAP | ~ READ FOR FULL ADDRESS",
+        );
+    }
+    #[test]
     fn wrapped_row_count_matches_overlay_chunks_including_empty_lines() {
         for document in [
             "",
@@ -1675,7 +1790,13 @@ mod tests {
                 for (width, height) in [(960, 640), (640, 480)] {
                     let overlay = super::overlay(&w, width, height, 0);
                     let panel = super::tree_overlay(&w, width, height);
-                    let tree_bounds = pixel_bounds(&panel[..6], width, height);
+                    assert_eq!(
+                        panel.is_empty(),
+                        collapsed || w.folder_view.is_some(),
+                        "OFF and replaced local overlays emit no remnants"
+                    );
+                    let tree_bounds =
+                        (!panel.is_empty()).then(|| pixel_bounds(&panel[..6], width, height));
                     let body: Vec<_> = overlay
                         .iter()
                         .filter(|v| v.color == [0.9, 0.96, 0.91])
@@ -1686,14 +1807,18 @@ mod tests {
                         let b = pixel_bounds(quad, width, height);
                         assert!(b[0] >= 0.0 && b[2] <= width as f32 + 0.01);
                         assert!(
-                            b[0] > tree_bounds[2] + 0.01 || b[1] > tree_bounds[3] + 0.01,
+                            tree_bounds
+                                .is_none_or(|tree| b[0] > tree[2] + 0.01 || b[1] > tree[3] + 0.01),
                             "reader ink under actual tree panel: collapsed={collapsed} ink={b:?} tree={tree_bounds:?}"
                         );
                         assert!(b[3] < height as f32 - 82.0, "body enters reader footer");
                     }
                     // Check reader-owned footer ink before the appended tree;
                     // its current-row color must not be mistaken for footer ink.
-                    let tree_start = overlay.iter().position(|v| v.color == [0.012; 3]).unwrap();
+                    let tree_start = overlay
+                        .iter()
+                        .position(|v| v.color == [0.012; 3])
+                        .unwrap_or(overlay.len());
                     let mut last_bottom = height as f32 - 82.0;
                     for color in [[0.6, 1.0, 0.7], [0.6, 0.9, 0.7], [0.4, 0.95, 0.6]] {
                         let ink: Vec<_> = overlay[..tree_start]
@@ -1730,15 +1855,12 @@ mod tests {
         .unwrap()
         .generate()
         .unwrap();
-        // Narrow 0.4.1 migration: the old oracle asserted an empty panel for
-        // https:// (the text.rs HTTPS suppression policy). Web rooms now draw
-        // the M-collapsible links/history graph instead. Still no filesystem
-        // or site outline: no hierarchy rows exist and the default collapsed
-        // panel is a header only, with no outline/link rows.
+        // OFF now removes all graph chrome, including the former collapsed header.
+        // The generated web page still has no invented filesystem/site hierarchy.
         assert!(g.world.navigation.rows.is_empty());
         assert!(g.world.tree_collapsed);
         let panel = super::tree_overlay(&g.world, 960, 640);
-        assert!(!panel.is_empty());
+        assert!(panel.is_empty());
         assert!(!panel.iter().any(|v| v.color == super::WEB_LINK));
         assert!(!panel.iter().any(|v| v.color == [0.6, 1.0, 0.7]));
     }

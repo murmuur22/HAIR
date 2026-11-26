@@ -91,6 +91,8 @@ fn aim(a: &mut App, anchor: &str) {
         .find(|d| d.id == anchor)
         .unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [d.at[0], d.at[2] + 1.1],
         yaw: 0.0,
         pitch: -0.1,
@@ -109,6 +111,8 @@ fn complete_cycle_reader_return_failure_and_entry_reset() {
         assert_eq!(a.world.current_space, space);
         assert_eq!(a.world.current, page);
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 1.35],
             yaw: 0.0,
             pitch: -0.5,
@@ -204,6 +208,8 @@ fn two_document_markers_in_one_space_keep_exact_page_and_tree_identity() {
         "workshop-notes.md".into(),
     ]);
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [-2.0, 1.35],
         yaw: 0.0,
         pitch: -0.5,
@@ -256,6 +262,8 @@ fn door_failure_focus_self_link_and_return_precedence() {
     press(&mut a, KeyCode::KeyE);
     assert_eq!(a.world.current_space, "notice-alcove");
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.35],
         yaw: 0.0,
         pitch: -0.5,
@@ -387,6 +395,8 @@ fn rendered_three_space_cycle_reskins_and_reader_links() {
             }
         }
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 1.35],
             yaw: 0.0,
             pitch: -0.5,
@@ -430,6 +440,8 @@ fn rendered_three_space_cycle_reskins_and_reader_links() {
     }
     // Reader link maps exact page ownership to default arrival. Same-page link retains reset intent.
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.35],
         yaw: 0.0,
         pitch: -0.5,
@@ -454,6 +466,8 @@ fn capture_overview(a: &mut App, out: &resources::SmokeOutput) {
     // Arrival is asserted and T-tested in place. Turn/walk to a full-room diagnostic
     // view for the unchanged generic20-color capture guard; sparse arrival18 refuses.
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, room[3] - 0.5],
         yaw: 0.0,
         pitch: -0.18,

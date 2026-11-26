@@ -93,6 +93,8 @@ fn check_tail(repeated: bool) {
         .find(|a| a.id == "entry-0")
         .unwrap();
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0], anchor.at[2] + 1.05],
         yaw: 0.0,
         pitch: ((anchor.at[1] + anchor.size[1] * 0.5 - 1.65) / 1.05).atan(),
@@ -132,15 +134,20 @@ fn check_tail(repeated: bool) {
             tap(&mut app, KeyCode::ArrowRight);
             assert_eq!(app.world.document().unwrap(), original, "EOF is inert");
             assert_eq!(app.scroll, 0);
-            // Independent wrap/geometry control; no change to font, palette,
-            // rendering, protected capture guards or the production scroll API.
-            let scale = 2.0;
-            let sidebar = if collapsed {
-                0.0
+            // Independent reserved-width calculation at 100% UI scale. Local
+            // readers have no second in-content tree reservation or OFF header.
+            let content_w = if collapsed {
+                w
             } else {
-                (w as f32 * 0.32).min(260.0) + 12.0
+                w - (w / 4).clamp(180, 280).min(w - 320)
             };
-            let cols = ((w as f32 - sidebar - 48.0) / (6.0 * scale)).max(1.0) as usize;
+            assert_eq!(app.ui_viewport(), [content_w, h]);
+            let scale = if content_w >= 640 && h >= 480 {
+                2.0
+            } else {
+                1.0
+            };
+            let cols = ((content_w as f32 - 48.0) / (6.0 * scale)).max(1.0) as usize;
             let lines: Vec<String> = original
                 .lines()
                 .flat_map(|line| {
@@ -157,12 +164,12 @@ fn check_tail(repeated: bool) {
                 .position(|line| line.contains("TAILEND"))
                 .unwrap();
             let last = lines.len() - 1;
-            let y = if collapsed { 108.0 } else { 80.0 };
+            let y = 80.0;
             let rows = ((h as f32 - y - 84.0) / (9.0 * scale)).max(1.0) as usize;
-            let at_marker = body_geometry(&app.world, w, h, marker);
+            let at_marker = body_geometry(&app.world, content_w, h, marker);
             assert!(!at_marker.is_empty());
             app.world.folder_view.as_mut().unwrap().reader = original.replace("TAILEND", "ZXZXZXZ");
-            let control = body_geometry(&app.world, w, h, marker);
+            let control = body_geometry(&app.world, content_w, h, marker);
             assert_ne!(
                 at_marker, control,
                 "direct positive geometry control distinguishes actual marker"
@@ -182,10 +189,10 @@ fn check_tail(repeated: bool) {
                 );
                 last_scroll = app.scroll;
                 if !ever_reached && marker >= app.scroll && marker < app.scroll + rows {
-                    let reached = body_geometry(&app.world, w, h, app.scroll);
+                    let reached = body_geometry(&app.world, content_w, h, app.scroll);
                     app.world.folder_view.as_mut().unwrap().reader =
                         original.replace("TAILEND", "ZXZXZXZ");
-                    let other = body_geometry(&app.world, w, h, app.scroll);
+                    let other = body_geometry(&app.world, content_w, h, app.scroll);
                     app.world.folder_view.as_mut().unwrap().reader = original.clone();
                     ever_reached = reached != other;
                 }
@@ -194,13 +201,16 @@ fn check_tail(repeated: bool) {
             // The tail is before the footer now. Visibility at document END is
             // not a body-tail requirement; instead prove both independently.
             assert_eq!(app.scroll, last);
-            assert_eq!(hair::text::local_reader_scroll_max(&app.world, w, h), last);
-            let end_geometry = body_geometry(&app.world, w, h, app.scroll);
+            assert_eq!(
+                hair::text::local_reader_scroll_max(&app.world, content_w, h),
+                last
+            );
+            let end_geometry = body_geometry(&app.world, content_w, h, app.scroll);
             app.world.folder_view.as_mut().unwrap().reader =
                 original.replace("262144 bytes.", "ZXZXZX ZXZXZX");
             assert_ne!(
                 end_geometry,
-                body_geometry(&app.world, w, h, app.scroll),
+                body_geometry(&app.world, content_w, h, app.scroll),
                 "actual final footer glyphs reachable"
             );
             app.world.folder_view.as_mut().unwrap().reader = original.clone();

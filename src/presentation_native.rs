@@ -22,7 +22,7 @@ impl App {
         self.release_navigation();
     }
     /// Release bookkeeping for keys whose press was consumed by the menu.
-    fn release_latch(&mut self, code: KeyCode) {
+    pub(super) fn release_latch(&mut self, code: KeyCode) {
         match code {
             KeyCode::KeyE => self.interact_held = false,
             KeyCode::Tab => self.tab_held = false,
@@ -77,15 +77,40 @@ impl App {
             return Some(Ok(false));
         }
         let shift = self.shifts.iter().any(|held| *held);
+        if self.chooser_pending || self.chooser_active { return Some(Ok(false)); }
+        if self.menu.is_some_and(|m| m.view == View::Storage) {
+            match code {
+                KeyCode::PageUp => { self.storage.scroll = self.storage.scroll.saturating_sub(8); return Some(Ok(false)); }
+                KeyCode::PageDown => { self.storage.scroll = self.storage.scroll.saturating_add(8); return Some(Ok(false)); }
+                _ => {}
+            }
+        }
         let menu = self.menu.as_mut().unwrap();
         match code {
             KeyCode::ArrowUp => menu.step(true),
             KeyCode::ArrowDown => menu.step(false),
             KeyCode::Tab => menu.step(shift),
             KeyCode::KeyQ => *menu = Menu::quit_confirm(),
-            KeyCode::ArrowLeft | KeyCode::ArrowRight if menu.view == View::Settings => {
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if menu.view == View::PlayerSettings => {
                 let larger = code == KeyCode::ArrowRight;
-                self.set_ui_scale(hair::presentation::step_scale(self.ui_scale, larger));
+                match menu.focused() {
+                    Item::FogDistance => {
+                        self.fog.step_distance(larger);
+                        self.player_preferences_changed();
+                    }
+                    Item::FogTint => {
+                        self.fog.step_tint(larger);
+                        self.player_preferences_changed();
+                    }
+                    Item::FogEnabled | Item::FileTree => {
+                        let item = menu.focused();
+                        self.activate_menu(item);
+                    }
+                    Item::Smaller | Item::Larger | Item::Reset => {
+                        self.set_ui_scale(hair::presentation::step_scale(self.ui_scale, larger))
+                    }
+                    _ => {}
+                }
             }
             KeyCode::Escape => match menu.view {
                 View::Settings => {
@@ -95,6 +120,8 @@ impl App {
                     }
                 }
                 View::Pause => self.close_menu(),
+                View::Appearance | View::PlayerSettings => *menu = Menu::settings(),
+                View::Storage => *menu = Menu { view: View::PlayerSettings, focus: 0 },
             },
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let item = menu.focused();
@@ -111,7 +138,45 @@ impl App {
         };
         match item {
             Item::Resume => self.close_menu(),
+            Item::Storage => self.open_storage(),
+            Item::StorageItemLimit | Item::StorageDiskLimit | Item::StorageChoose => self.storage_activate(item),
             Item::Settings => *menu = Menu::settings(),
+            Item::PlayerSettings => {
+                *menu = Menu {
+                    view: View::PlayerSettings,
+                    focus: 0,
+                }
+            }
+            Item::Appearance => {
+                *menu = Menu {
+                    view: View::Appearance,
+                    focus: 0,
+                }
+            }
+            Item::Override(category) => self.appearance.toggle(category),
+            Item::Theme => {
+                let result = if let Some(renderer) = &mut self.renderer {
+                    super::switch_theme(
+                        &self.themes,
+                        &mut self.theme_index,
+                        &mut self.pose,
+                        renderer,
+                        &self.world,
+                    )
+                } else {
+                    let next = (self.theme_index + 1) % self.themes.len();
+                    self.themes[next]
+                        .reskin_from(&self.themes[self.theme_index], &self.pose)
+                        .map(|()| self.theme_index = next)
+                };
+                if let Err(error) = result {
+                    self.local_status = format!("Appearance unchanged: {error}");
+                }
+            }
+            Item::Back if matches!(menu.view, View::Appearance | View::PlayerSettings) => {
+                *menu = Menu::settings()
+            }
+            Item::Back if menu.view == View::Storage => { *menu = Menu { view: View::PlayerSettings, focus: 0 }; }
             Item::Back => {
                 *menu = Menu {
                     view: View::Pause,
@@ -126,7 +191,28 @@ impl App {
                 self.set_ui_scale(hair::presentation::step_scale(self.ui_scale, false))
             }
             Item::Larger => self.set_ui_scale(hair::presentation::step_scale(self.ui_scale, true)),
-            Item::Reset => self.set_ui_scale(100),
+            Item::Reset => {
+                self.fog = Default::default();
+                self.world.tree_collapsed = true;
+                self.set_ui_scale(100);
+            }
+            Item::FileTree => {
+                self.world.tree_collapsed = !self.world.tree_collapsed;
+                self.clamp_local_reader_scroll();
+                self.player_preferences_changed();
+            }
+            Item::FogEnabled => {
+                self.fog.toggle();
+                self.player_preferences_changed();
+            }
+            Item::FogDistance => {
+                self.fog.step_distance(true);
+                self.player_preferences_changed();
+            }
+            Item::FogTint => {
+                self.fog.step_tint(true);
+                self.player_preferences_changed();
+            }
         }
         false
     }
@@ -135,7 +221,7 @@ impl App {
         let Some(menu) = self.menu else {
             return false;
         };
-        if !self.focused {
+        if !self.focused || self.storage.edit.is_some() || self.chooser_pending || self.chooser_active {
             return false;
         }
         let physical = self.renderer.as_ref().map_or([960, 640], |r| r.size);
@@ -150,14 +236,30 @@ impl App {
     /// Logical screen-space viewport used by HUD layout and reader metrics.
     pub(super) fn ui_viewport(&self) -> [u32; 2] {
         let physical = self.renderer.as_ref().map_or([960, 640], |r| r.size);
-        hair::presentation::ui_viewport(physical, self.ui_scale)
+        hair::sidebar::Frame::new(
+            physical,
+            self.ui_scale,
+            self.local.is_some()
+                && !self.world.tree_collapsed
+                && self.map_mode != hair::exploration::MapMode::Expanded,
+        )
+        .content
     }
     /// Applies immediately: renderer layout and any open local reader's scroll bound.
     pub(super) fn set_ui_scale(&mut self, percent: u16) {
+        if let Some(mode) = &mut self.place_mode {
+            mode.cancel_pointer();
+        }
+        self.sidebar_press = None;
+        self.sidebar_wheel = 0.0;
         self.ui_scale = percent.clamp(100, 200);
         if let Some(renderer) = &mut self.renderer {
             renderer.ui_scale = self.ui_scale;
         }
+        self.clamp_local_reader_scroll();
+        self.player_preferences_changed();
+    }
+    fn clamp_local_reader_scroll(&mut self) {
         if self.world.reading && self.local.is_some() {
             let [width, height] = self.ui_viewport();
             self.scroll = self.scroll.min(hair::text::local_reader_scroll_max(

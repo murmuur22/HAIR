@@ -87,7 +87,11 @@ static NSString *RangePlan(NSUInteger size, long long requested, long long curre
         if(!reason && info) {
             if(info.allowedContentTypes.count && ![info.allowedContentTypes containsObject:@"public.mpeg-4"]) reason=@"type";
             else { info.contentType=@"public.mpeg-4";info.contentLength=(long long)owner.bytes.length;
-                info.byteRangeAccessSupported=YES;info.entireLengthAvailableOnDemand=YES; }
+                info.byteRangeAccessSupported=YES;
+                // Delivery is request-budgeted, not unconditionally on demand.
+                // YES makes AVFoundation bypass its read cache on newer macOS,
+                // spending RequestCap on tiny atom reads before the first sample.
+                info.entireLengthAvailableOnDemand=NO; }
         }
         AVAssetResourceLoadingDataRequest *d=request.dataRequest;
         uint64_t start=0,end=0;

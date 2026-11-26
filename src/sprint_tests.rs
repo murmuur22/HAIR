@@ -13,6 +13,8 @@ fn held_shift_doubles_world_movement_and_release_restores_walk() {
         false,
     );
     let start = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [-2.5, 3.0],
         yaw: 0.0,
         pitch: 0.0,
@@ -61,6 +63,8 @@ fn tap(a: &mut App, code: KeyCode) {
 }
 fn start() -> Pose {
     Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [-2.5, 3.0],
         yaw: 0.0,
         pitch: 0.0,
@@ -135,6 +139,7 @@ fn running_diagonals_dt_caps_and_host_collisions_remain_bounded() {
     key(&mut a, KeyCode::KeyS, true);
     let h = &a.themes[0].host;
     let corner = Pose {
+        feet_y: 0.0,
         position: [h.room[2] - 0.01, h.room[3] - 0.01],
         ..start()
     };
@@ -146,6 +151,7 @@ fn running_diagonals_dt_caps_and_host_collisions_remain_bounded() {
     key(&mut a, KeyCode::KeyS, false);
     let d = a.themes[0].host.anchor("document");
     let object = Pose {
+        feet_y: 0.0,
         position: [d.at[0] - d.size[0] * 0.5 - 0.22 - 0.01, d.at[2]],
         ..start()
     };
@@ -207,10 +213,7 @@ fn focus_loss_and_actual_escape_capture_release_stop_sprinting() {
             key(&mut a, shift, false);
         }
         if !focus {
-            // Presentation menu migration: world Escape now pauses (same capture
-            // release); resume explicitly so the original walk oracle is unchanged.
-            assert!(a.menu.is_some());
-            tap(&mut a, KeyCode::Escape);
+            // Captured Escape unlocks without pausing; preserve the walk oracle.
             assert!(a.menu.is_none());
             stopped(&a);
         }
@@ -234,6 +237,8 @@ fn actual_reader_address_and_folder_dialog_isolate_running_and_release_order() {
         let mut a = app();
         let d = a.themes[0].host.anchor("document");
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [d.at[0], d.at[2] + 1.5],
             yaw: 0.0,
             pitch: -0.1,
@@ -307,9 +312,7 @@ fn capture_release_does_not_resurrect_stale_other_shift_after_recapture() {
     key(&mut a, KeyCode::ShiftLeft, true);
     tap(&mut a, KeyCode::Escape);
     stopped(&a);
-    // Presentation menu migration: Escape pauses; resume before recapture.
-    assert!(a.menu.is_some());
-    tap(&mut a, KeyCode::Escape);
+    // First captured Escape releases without pausing or leaving a run latch.
     assert!(a.menu.is_none());
     stopped(&a);
     // Fresh right modifier after a context reset must not inherit the old left

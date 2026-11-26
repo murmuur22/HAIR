@@ -86,7 +86,9 @@ fn local_theme_is_open_platform_with_fitted_live_doors_and_legacy_host_walls() {
     for bound in view.bindings.values() {
         assert_eq!(bound.entry, snapshot.entries[bound.index]);
     }
-    assert_eq!(local_scene.room, [-10.5, -6.0, 10.5, 6.0]);
+    // This fixture has 24 folders: inherited count-derived width is capped at
+    // 28m. Stable map cards must not change these physical room dimensions.
+    assert_eq!(local_scene.room, [-14.0, -6.0, 14.0, 6.0]);
     assert_eq!(local_scene.spawn, [0.0, 5.65]);
     assert!(local_scene.geometry.is_empty() && local_scene.overhead.is_empty());
     let anchor = |id: &str| local_scene.anchors.iter().find(|a| a.id == id).unwrap();
@@ -138,10 +140,17 @@ fn local_theme_is_open_platform_with_fitted_live_doors_and_legacy_host_walls() {
         visible.len() > theme.vertices.len(),
         "live door/file labels must remain"
     );
-    assert!(same_positions(
-        &visible[..theme.vertices.len()],
-        &theme.vertices
-    ));
+    assert!(same_positions(&visible[..host_mesh.len()], &host_mesh));
+    // File-item substitution replaces only the old marker, not stationary bodies.
+    for a in local_scene.anchors.iter().filter(|a| a.role == "document") {
+        for vertex in theme.collection_shape(&a.id) {
+            assert!(
+                visible
+                    .iter()
+                    .any(|v| bytemuck::bytes_of(v) == bytemuck::bytes_of(&vertex))
+            );
+        }
+    }
 
     // Actual retained floor: six faces, finite vertices, full XZ platform and
     // original thickness. Do not pass by making the entire scene invisible.
@@ -192,13 +201,13 @@ fn local_theme_is_open_platform_with_fitted_live_doors_and_legacy_host_walls() {
         ("entry-0", [-8.8, 0.0, -6.5], [1.45, 2.0, 0.6], [0.0, 1.0]),
         (
             "folder-next",
-            [11.2, 0.0, 0.0],
+            [14.7, 0.0, 0.0],
             [0.6, 2.0, 1.45],
             [-1.0, 0.0],
         ),
         (
             "folder-previous",
-            [-11.2, 0.0, 0.0],
+            [-14.7, 0.0, 0.0],
             [0.6, 2.0, 1.45],
             [1.0, 0.0],
         ),
@@ -263,6 +272,8 @@ fn local_theme_is_open_platform_with_fitted_live_doors_and_legacy_host_walls() {
         // Aim exactly at the real host target; no undocumented pitch contract.
         let distance = 1.25;
         let pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [
                 a.at[0] + inward[0] * distance,
                 a.at[2] + inward[1] * distance,

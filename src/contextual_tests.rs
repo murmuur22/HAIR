@@ -78,6 +78,8 @@ pub(super) fn two_targets() -> App {
     a.themes[0].document = [-0.65, -3.0];
     a.themes[0].portal = [0.65, -4.0];
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, -2.6],
         yaw: 0.0,
         pitch: -0.4,
@@ -169,6 +171,8 @@ fn reader_reverse_wrap_refusals_close_and_world_isolation() {
 fn contextual_invalidation_and_entry_reset_clear_named_selection() {
     let mut a = app();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.8],
         yaw: 0.7,
         pitch: -0.5,
@@ -190,6 +194,8 @@ fn contextual_range_sector_occlusion_empty_and_single_are_bounded() {
     for pose in [
         Pose::default(),
         Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 1.8],
             yaw: std::f32::consts::PI,
             pitch: 0.0,
@@ -201,6 +207,8 @@ fn contextual_range_sector_occlusion_empty_and_single_are_bounded() {
         assert!(a.world.interaction.is_none());
     }
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.8],
         yaw: 0.7,
         pitch: -0.5,
@@ -344,6 +352,8 @@ fn rendered_contextual_selection_reader_tracer() {
     renderer.set_materials(&a.themes[0].textures).unwrap();
     a.renderer = Some(renderer);
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.8],
         yaw: 0.0,
         pitch: -0.5,
@@ -465,6 +475,8 @@ fn png_pixels(path: &Path) -> Vec<u8> {
 fn contextual_tab_selects_near_off_aim_document_and_e_uses_highlighted_target() {
     let mut a = app();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.8],
         yaw: 0.7,
         pitch: -0.5,

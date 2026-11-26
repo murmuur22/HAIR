@@ -59,6 +59,8 @@ fn initial_cancel_restores_local_interaction_mode() {
         .find(|x| x.role == "document")
         .unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [document.at[0], document.at[2] + 1.5],
         yaw: 0.0,
         pitch: -0.1,

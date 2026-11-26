@@ -473,12 +473,23 @@ fn canonical_custom_and_fallback_trim_follow_all_host_normals_and_guards() {
             normals,
             [[0, 1], [0, -1], [1, 0], [-1, 0]].into_iter().collect()
         );
-        assert_eq!(
-            actual.len(),
-            expected.len(),
+        assert!(
+            actual.len() >= expected.len(),
             "complete frames/custom models, no shell/panel substitutes"
         );
-        for (a, e) in actual.iter().zip(&expected) {
+        // R8 appends edge decoration after the complete portal vocabulary.
+        // Validate that suffix spatially; never allow it to pay model debt.
+        assert!(
+            actual[expected.len()..].as_chunks::<3>().0.iter().all(|tri| {
+                tri.iter().all(|v| {
+                    (0.049..=1.001).contains(&v.position[1]) && v.texture == 0 && v.uv == [0.0; 2]
+                }) && tri
+                    .iter()
+                    .all(|v| (v.position[2] - h.room[1]).abs() <= 0.101)
+            }),
+            "only front-edge stanchions may follow complete frames"
+        );
+        for (a, e) in actual[..expected.len()].iter().zip(&expected) {
             assert!((0..3).all(|i| (a.position[i] - e.position[i]).abs() < 0.0001));
             assert_eq!(a.color, e.color);
             assert_eq!(a.uv, e.uv);

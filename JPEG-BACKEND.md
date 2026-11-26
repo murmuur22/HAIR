@@ -56,9 +56,16 @@ constructing Decoder or calling read_info. Existing encoded4MiB, axes1..1024,
 RGBA4MiB, marker4096, header256KiB, ancillary128KiB, unique nonzero 8-bit DQT,
 bounded incomplete baseline DHT, SOF0 precision8, ordered gray1 or YCbCr1/2/3,
 sampling1..4/max10 MCU blocks, all-component single sequential scan, APP0 JFIF-only,
-no APP1..15, entropy framing and no-trailer predicates remain unchanged. Sampling
+bounded APP1..15, entropy framing and no-trailer predicates remain enforced.
+The inventory/layout successor admits opaque APP payloads under the aggregate
+128KiB ancillary limit. A bounded TIFF IFD0 parser reads only EXIF orientation
+(1..8, little or big endian, at most 1024 entries, one EXIF segment); it follows
+no thumbnail/sub-IFD pointers. Orientations are applied directly while writing
+RGBA from samples, with swapped dimensions where required and no extra image.
+ICC and Adobe rendering signatures remain explicitly refused. Sampling
 is saved in a fixed three-element structure in that SAME validated SOF0 branch;
-there is no second parser, path authority or encoded clone.
+There is no second JPEG framing parser, path authority or encoded clone; the
+small EXIF parser reads only slices of already bounded APP1 payloads.
 
 Then calculate/check the logical budget below, construct Decoder<Cursor<&[u8]>>,
 set_max_decoding_buffer_size(exact S) and explicit Grayscale/YCbCr, read_info,
@@ -96,12 +103,14 @@ not just an unexplained constant. Source basis: parser.rs parse_dht/parse_dqt/
 parse_com/parse_app, huffman.rs HuffmanTable::new/derive_huffman_codes,
 decoder.rs table merges/SOF/SOS/scan, worker/{mod,immediate}.rs, upsampler.rs.
 Conservative disjoint allowances within T (not observed allocator measurements):
-  256KiB header/scratch allowance: equal to the entire preflight header cap even
-    though the parser streams it rather than retaining a full header copy.
-  128KiB COM/ancillary allowance: aggregate preflight cap; one COM Vec is at most
-    65533 bytes and is immediately dropped. Even two such temporary payloads fit.
-    APP0 uses a five-byte stack probe; APP1..15 are refused before this parser;
-    ICC/EXIF/XMP/PSIR and MJPEG default-table expansion are unreachable here.
+  256KiB header/scratch allowance: equal to the entire preflight header cap.
+    This also covers the vendor APP1 parse buffer (at most 65533 bytes), including
+    when it coexists with a retained EXIF/XMP copy. No encoded-image clone occurs.
+  128KiB COM/ancillary allowance: aggregate preflight cap; retained EXIF/XMP/PSIR
+    plus a new ancillary result cannot exceed the total admitted payload bytes.
+    APP1's temporary source buffer is additionally covered by header/scratch.
+    APP0 uses a five-byte stack probe. ICC and Adobe color signatures and MJPEG
+    default-table expansion remain unreachable under preflight.
   128KiB Huffman allowance: at most eight unique admitted class/id tables total.
     Conservatively allow 24 table slots across resident, parse staging, merge or
     temporary copies. Each table's logical fields fit 4KiB: <=256 value bytes,

@@ -140,6 +140,8 @@ fn rear_mesh_and_all_portal_cues_share_the_prompt_wall_basis() {
             // than reflecting the glyphs to change their facing convention.
             assert!(u.cross(v).dot(glam::Vec3::new(n[0], 0.0, n[1])) < 0.0);
             let pose = Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: [a.at[0] + n[0] * 1.05, a.at[2] + n[1] * 1.05],
                 yaw: (-n[0]).atan2(n[1]),
                 pitch: ((1.0_f32 - 1.65) / 1.05).atan(),

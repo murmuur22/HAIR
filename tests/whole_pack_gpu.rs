@@ -202,6 +202,8 @@ fn two_models_ui_roundtrip_and_greenleaf_metal() {
                 view_formats: &[],
             });
             let pose = Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: [
                     0.0,
                     if i == 0 {

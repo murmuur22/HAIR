@@ -17,12 +17,33 @@ fn app() -> App {
 #[test]
 fn tree_m_release_repeat_focus_reader_and_reskin_isolation() {
     let mut a = app();
-    assert!(!a.world.tree_collapsed);
+    assert!(a.world.tree_collapsed, "file tree defaults OFF");
+    // Explicitly turn it ON through Settings; M must never change that choice.
+    for code in [
+        KeyCode::Escape,
+        KeyCode::ArrowDown,
+        KeyCode::Enter,
+        KeyCode::Enter, // Settings > Player Settings
+        KeyCode::ArrowDown,
+        KeyCode::ArrowDown,
+        KeyCode::ArrowDown,
+        KeyCode::Enter,
+        KeyCode::Escape,
+        KeyCode::Escape,
+        KeyCode::Escape,
+    ] {
+        a.key(code, true, false).unwrap();
+        a.key(code, false, false).unwrap();
+    }
+    assert!(!a.world.tree_collapsed && a.menu.is_none());
     a.key(KeyCode::KeyM, true, false).unwrap();
-    assert!(a.world.tree_collapsed, "M collapses informational tree");
+    assert!(
+        !a.world.tree_collapsed,
+        "M never toggles the Settings-owned tree"
+    );
     for repeat in [true, false, true] {
         a.key(KeyCode::KeyM, true, repeat).unwrap();
-        assert!(a.world.tree_collapsed);
+        assert!(!a.world.tree_collapsed);
     }
     a.world.reading = true;
     a.key(KeyCode::Tab, true, false).unwrap();
@@ -52,12 +73,12 @@ fn tree_m_release_repeat_focus_reader_and_reskin_isolation() {
     assert!(!a.world.tree_collapsed);
     a.focus_changed(true);
     a.key(KeyCode::KeyM, true, false).unwrap();
-    assert!(a.world.tree_collapsed);
+    assert!(!a.world.tree_collapsed);
     assert!(a.world.reading);
     assert!(!a.input.forward);
     a.key(KeyCode::KeyM, false, false).unwrap();
     a.key(KeyCode::KeyM, true, true).unwrap();
-    assert!(a.world.tree_collapsed);
+    assert!(!a.world.tree_collapsed);
 }
 #[test]
 #[ignore = "serialized optimized Metal; explicit HAIR_TREE_CAPTURE_DIR and post-build HAIR_TREE_SITE"]
@@ -130,6 +151,8 @@ fn rendered_site_tree_tracer() {
         a.key(KeyCode::KeyM, false, false).unwrap();
         a.key(KeyCode::KeyM, true, false).unwrap();
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [-0.55, 1.1],
             yaw: 0.0,
             pitch: -0.5,
@@ -156,6 +179,8 @@ fn rendered_site_tree_tracer() {
         a.key(KeyCode::KeyM, true, false).unwrap();
         capture(&a, &follow, "reader-welcome.png", size);
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [1.6, -2.1],
             yaw: 0.0,
             pitch: -0.1,

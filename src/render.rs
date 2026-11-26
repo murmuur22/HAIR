@@ -1,4 +1,5 @@
 pub mod web_feedback;
+mod editor;
 use crate::{Pose, Result, World, assets::Vertex};
 use std::time::Duration;
 use wgpu::util::DeviceExt;
@@ -43,6 +44,12 @@ pub struct Renderer {
     sky_rays_group: wgpu::BindGroup,
     target_is_srgb: bool,
     ui_pipeline: wgpu::RenderPipeline,
+    item_pipeline: wgpu::RenderPipeline,
+    inspector_color_pipeline: wgpu::RenderPipeline,
+    inspector_texture_pipeline: wgpu::RenderPipeline,
+    inspector_media_pipeline: wgpu::RenderPipeline,
+    item_sources: Vec<std::sync::Arc<crate::assets::Texture>>,
+    item_materials: Vec<wgpu::BindGroup>,
     media_pipeline: wgpu::RenderPipeline,
     viewer: Option<(std::sync::Arc<crate::assets::Texture>, wgpu::BindGroup)>,
     pub viewer_visible: bool,
@@ -56,8 +63,30 @@ pub struct Renderer {
     pub size: [u32; 2],
     /// Session-only requested screen-space UI scale percentage (HUD, not 3D).
     pub ui_scale: u16,
+    fog: crate::fog::Fog,
     /// Open presentation menu, drawn last over every other screen-space layer.
     pub menu: Option<crate::presentation::Menu>,
+    pub storage_overlay: Option<Vec<Vertex>>,
+    pub appearance_policy: crate::appearance::Policy,
+    pub appearance_name: String,
+    pub inventory_overlay: Option<Vec<Vertex>>,
+    pub collection_overlay: Vec<Vertex>,
+    pub placement_overlay: Vec<Vertex>,
+    pub editor_preview: Vec<Vertex>,
+    pub route_pan: [i32; 2],
+    pub route_back: Option<crate::exploration::RoomId>,
+    pub map_selection: Option<crate::directory_map::Confirmation>,
+    pub map_history_offset: usize,
+    pub map_confirm_travel: bool,
+    pub map_hover: Option<crate::directory_map_view::Action>,
+    pub sidebar_snapshot: Option<std::sync::Arc<crate::local_explorer::Snapshot>>,
+    pub sidebar_enabled: bool,
+    pub sidebar_offset: usize,
+    pub sidebar_hover: Option<usize>,
+    pub directory_map: Option<(
+        std::sync::Arc<crate::directory_map::Map>,
+        crate::exploration::MapMode,
+    )>,
     pub exploration: Option<(
         std::sync::Arc<crate::exploration::Map>,
         crate::exploration::MapMode,
@@ -156,7 +185,7 @@ impl Renderer {
             label: Some("shared camera layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -195,6 +224,20 @@ impl Renderer {
         });
         let world_pipeline = make_pipeline("world_vs", "world_fs", true, Some(&shared_layout));
         let ui_pipeline = make_pipeline("ui_vs", "ui_fs", false, None);
+        let item_pipeline = make_pipeline("ui_vs", "texture_fs", false, Some(&shared_layout));
+        let inspector_color_pipeline = make_pipeline("ui_vs", "ui_fs", true, None);
+        let inspector_texture_pipeline =
+            make_pipeline("ui_vs", "texture_fs", true, Some(&shared_layout));
+        let inspector_media_pipeline = make_pipeline(
+            "ui_vs",
+            if format.is_srgb() {
+                "media_fs"
+            } else {
+                "media_unorm_fs"
+            },
+            true,
+            Some(&shared_layout),
+        );
         let media_pipeline = make_pipeline(
             "ui_vs",
             if format.is_srgb() {
@@ -208,9 +251,9 @@ impl Renderer {
         let object_pipeline = make_pipeline(
             "world_vs",
             if format.is_srgb() {
-                "media_fs"
+                "object_fs"
             } else {
-                "media_unorm_fs"
+                "object_unorm_fs"
             },
             true,
             Some(&shared_layout),
@@ -264,7 +307,7 @@ impl Renderer {
         });
         let camera = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera pose"),
-            size: 64,
+            size: 112,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -305,6 +348,12 @@ impl Renderer {
             sky_rays_group,
             target_is_srgb: format.is_srgb(),
             ui_pipeline,
+            item_pipeline,
+            inspector_color_pipeline,
+            inspector_texture_pipeline,
+            inspector_media_pipeline,
+            item_sources: Vec::new(),
+            item_materials: Vec::new(),
             media_pipeline,
             viewer: None,
             viewer_visible: false,
@@ -317,7 +366,26 @@ impl Renderer {
             depth,
             size,
             ui_scale: 100,
+            fog: Default::default(),
             menu: None,
+            storage_overlay: None,
+            appearance_policy: Default::default(),
+            appearance_name: String::new(),
+            inventory_overlay: None,
+            collection_overlay: Vec::new(),
+            placement_overlay: Vec::new(),
+            editor_preview: Vec::new(),
+            route_pan: [0, 0],
+            route_back: None,
+            directory_map: None,
+            map_selection: None,
+            map_history_offset: 0,
+            map_confirm_travel: false,
+            map_hover: None,
+            sidebar_snapshot: None,
+            sidebar_enabled: false,
+            sidebar_offset: 0,
+            sidebar_hover: None,
             exploration: None,
             pack_feedback: String::new(),
             address_entry: None,
@@ -346,6 +414,9 @@ impl Renderer {
     /// Failure retains materials, sky and viewer. No source acquisition on T.
     pub fn set_theme_appearance(&mut self, theme: &crate::theme::Theme) -> Result<()> {
         use crate::sky::SkyAppearance;
+        if let Some(reason) = theme.unavailable_reason() {
+            return Err(format!("Theme {} unavailable: {reason}", theme.name));
+        }
         theme.sky.validate()?;
         let sky_material = if let SkyAppearance::Panorama(image) = &theme.sky {
             if let SkyAppearance::Panorama(old) = &self.sky
@@ -422,6 +493,39 @@ impl Renderer {
         }
         self.materials = materials;
         self.material_sources = textures.to_vec();
+        Ok(())
+    }
+    /// Separate bounded material namespace for the selected owned inventory item.
+    pub fn set_item_materials(
+        &mut self,
+        textures: &[std::sync::Arc<crate::assets::Texture>],
+    ) -> Result<()> {
+        if textures.len() > 4
+            || textures.iter().map(|t| t.rgba.len()).sum::<usize>() > 8 * 1024 * 1024
+        {
+            return Err("Inventory item texture budget".into());
+        }
+        if textures.len() == self.item_sources.len()
+            && textures
+                .iter()
+                .zip(&self.item_sources)
+                .all(|(a, b)| std::sync::Arc::ptr_eq(a, b))
+        {
+            return Ok(());
+        }
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let materials = textures
+            .iter()
+            .map(|t| self.upload_material(t, &sampler))
+            .collect::<Result<Vec<_>>>()?;
+        self.item_materials = materials;
+        self.item_sources = textures.to_vec();
         Ok(())
     }
     fn upload_material(
@@ -520,7 +624,12 @@ impl Renderer {
     /// Update just the fixed feedback buffer; existing room/material/sky ownership
     /// and all staging/work/source guards remain untouched.
     pub fn set_web_feedback(&mut self, snapshot: &web_feedback::Snapshot, context_owned: bool) {
-        let viewport = self.ui_viewport();
+        let viewport = crate::sidebar::Frame::new(
+            self.size,
+            self.ui_scale,
+            self.sidebar_enabled && self.sidebar_snapshot.is_some(),
+        )
+        .content;
         snapshot.paint(&mut self.web_feedback_vertices, viewport, context_owned);
         self.web_feedback_active = !self.web_feedback_vertices.is_empty();
         if self.web_feedback_active {
@@ -564,6 +673,12 @@ impl Renderer {
     pub fn ui_viewport(&self) -> [u32; 2] {
         crate::presentation::ui_viewport(self.size, self.ui_scale)
     }
+    pub fn set_fog(&mut self, fog: crate::fog::Fog) {
+        self.fog = fog.validated().unwrap_or_default();
+    }
+    pub fn fog(&self) -> crate::fog::Fog {
+        self.fog
+    }
     pub fn resize(&mut self, size: [u32; 2]) {
         self.size = size;
         self.depth = Self::depth(&self.device, size);
@@ -575,7 +690,7 @@ impl Renderer {
         world: &World,
         scroll: usize,
     ) -> Result<()> {
-        self.draw_frame(target, pose, Some(world), scroll, 1.65)
+        self.draw_frame(target, pose, Some(world), scroll, pose.eye_height())
     }
     /// The workshop uses the visitor's exact material/world pipeline without its HUD.
     pub fn draw_preview(&self, target: &wgpu::TextureView, pose: &Pose) -> Result<()> {
@@ -646,17 +761,29 @@ impl Renderer {
             pose.pitch.sin(),
             -pose.yaw.cos() * pose.pitch.cos(),
         );
+        let frame = crate::sidebar::Frame::new(
+            self.size,
+            self.ui_scale,
+            self.sidebar_enabled
+                && world.is_some_and(|w| w.folder_view.is_some() && !w.tree_collapsed),
+        );
+        let content_width = self.size[0] - frame.left;
         let matrix = Mat4::perspective_rh(
             65.0_f32.to_radians(),
-            self.size[0] as f32 / self.size[1] as f32,
+            content_width as f32 / self.size[1] as f32,
             0.05,
             50.0,
         ) * Mat4::look_to_rh(eye, direction, Vec3::Y);
-        self.queue.write_buffer(
-            &self.camera,
-            0,
-            bytemuck::cast_slice(&matrix.to_cols_array()),
-        );
+        let mut camera = [0.0f32; 28];
+        camera[..16].copy_from_slice(&matrix.to_cols_array());
+        // Workshop previews have no visitor settings, preserving their presentation.
+        let mut fog = self.fog;
+        if world.is_none() && fog.enabled() {
+            fog.toggle();
+        }
+        camera[16..].copy_from_slice(fog.uniforms(eye.to_array()).as_flattened());
+        self.queue
+            .write_buffer(&self.camera, 0, bytemuck::cast_slice(&camera));
         if self.sky_material.is_some() {
             // Same yaw/pitch/FOV convention as the world view, deliberately no
             // eye position or inverse translated matrix: exact translation invariance.
@@ -664,7 +791,7 @@ impl Renderer {
             let right = direction.cross(Vec3::Y).normalize();
             let up = right.cross(direction);
             let rays = [
-                (right * (self.size[0] as f32 / self.size[1] as f32) * scale)
+                (right * (content_width as f32 / self.size[1] as f32) * scale)
                     .extend(0.0)
                     .to_array(),
                 (up * scale).extend(0.0).to_array(),
@@ -674,7 +801,7 @@ impl Renderer {
                 .write_buffer(&self.sky_rays, 0, bytemuck::cast_slice(&rays));
         }
         // Screen-space layers lay out in the logical viewport; 3D/camera stay physical.
-        let [ui_w, ui_h] = self.ui_viewport();
+        let [ui_w, ui_h] = frame.content;
         let media = self.viewer.as_ref().filter(|_| {
             self.viewer_visible
                 && self.address_entry.is_none()
@@ -697,17 +824,26 @@ impl Renderer {
                 }
             })
             .unwrap_or_default();
-        if let Some((map, mode)) = &self.exploration {
-            // Yield the whole map, without changing its retained mode or state.
-            // Feedback replaces the portal panel, so only a visible panel owns space.
+        if let Some((map, crate::exploration::MapMode::Compact)) = &self.directory_map {
+            ui.extend(crate::text::directory_map::overlay(
+                map,
+                crate::exploration::MapMode::Compact,
+                ui_w,
+                ui_h,
+                [0, 0],
+            ));
+        }
+        if let Some((map, crate::exploration::MapMode::Compact)) = &self.exploration {
             let disclosure_owns_space = world.is_some_and(|world| {
-                (!self.web_feedback_active
-                    && !crate::text::portal_overlay(world, ui_w, ui_h).is_empty())
-                    || (*mode == crate::exploration::MapMode::Expanded && !world.tree_collapsed)
+                !self.web_feedback_active
+                    && !crate::text::portal_overlay(world, ui_w, ui_h).is_empty()
             });
             if !disclosure_owns_space {
-                ui.extend(crate::text::exploration_map::overlay_at(
-                    map, *mode, pose, ui_w, ui_h,
+                ui.extend(crate::text::exploration_map::route_overlay(
+                    map,
+                    crate::exploration::MapMode::Compact,
+                    ui_w,
+                    ui_h,
                 ));
             }
         }
@@ -774,6 +910,17 @@ impl Renderer {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
         });
+        let content_viewport = |pass: &mut wgpu::RenderPass<'_>| {
+            pass.set_viewport(
+                frame.left as f32,
+                0.0,
+                content_width as f32,
+                self.size[1] as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(frame.left, 0, content_width, self.size[1]);
+        };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         if let Some(group) = &self.sky_material {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -789,6 +936,7 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
+            content_viewport(&mut pass);
             pass.set_pipeline(&self.sky_pipeline);
             pass.set_bind_group(0, &self.sky_rays_group, &[]);
             pass.set_bind_group(1, group, &[]);
@@ -820,6 +968,7 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
+            content_viewport(&mut pass);
             pass.set_pipeline(&self.world_pipeline);
             pass.set_bind_group(0, &self.camera_group, &[]);
             pass.set_vertex_buffer(0, self.geometry.slice(..));
@@ -847,6 +996,7 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
+            content_viewport(&mut pass);
             pass.set_pipeline(&self.ui_pipeline);
             pass.set_vertex_buffer(0, ui_buffer.slice(..));
             pass.draw(0..ui.len() as u32, 0..1);
@@ -869,10 +1019,12 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
+            content_viewport(&mut pass);
             pass.set_pipeline(&self.media_pipeline);
-            // Same logical frame as the quad above, mapped to physical pixels.
-            let [sx, sy] = [0, 1].map(|i| self.size[i] as f32 / [ui_w, ui_h][i] as f32);
-            let left = ((16.0 * sx) as u32).min(self.size[0] - 1);
+            // Scissor coordinates are framebuffer absolute, not viewport relative.
+            let sx = content_width as f32 / ui_w as f32;
+            let sy = self.size[1] as f32 / ui_h as f32;
+            let left = (frame.left + (16.0 * sx) as u32).min(self.size[0] - 1);
             let top = ((68.0 * sy) as u32).min(self.size[1] - 1);
             pass.set_scissor_rect(
                 left,
@@ -885,11 +1037,127 @@ impl Renderer {
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..6, 0..1);
         }
+        // The opaque explorer owns the reserved strip; modal overlays remain full-window.
+        if frame.left > 0
+            && let Some(snapshot) = &self.sidebar_snapshot
+        {
+            let ui = crate::text::sidebar_overlay(
+                snapshot,
+                frame,
+                self.sidebar_offset,
+                self.sidebar_hover,
+            );
+            let buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("directory sidebar"),
+                    contents: bytemuck::cast_slice(&ui),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reserved directory sidebar"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_scissor_rect(0, 0, frame.left, self.size[1]);
+            pass.set_pipeline(&self.ui_pipeline);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..ui.len() as u32, 0..1);
+        }
         // The paused menu is drawn last so no reader/media/feedback layer covers it.
-        let menu = self
+        let menu = self.storage_overlay.clone().or_else(|| self
             .menu
             .filter(|_| world.is_some())
-            .map(|menu| crate::presentation::overlay(&menu, self.ui_scale, self.size))
+            .map(|menu| {
+                crate::presentation::overlay_with_player(
+                    &menu,
+                    self.ui_scale,
+                    self.size,
+                    world.is_some_and(|w| !w.tree_collapsed),
+                    &self.appearance_policy,
+                    &self.appearance_name,
+                    self.fog,
+                )
+            })
+            ).or_else(|| self.inventory_overlay.clone())
+            .or_else(|| {
+                (!self.placement_overlay.is_empty()).then(|| self.placement_overlay.clone())
+            })
+            .or_else(|| {
+                (!self.collection_overlay.is_empty()).then(|| self.collection_overlay.clone())
+            })
+            .or_else(|| {
+                if self.address_entry.is_some() || !world.is_some_and(|w| !w.reading) {
+                    return None;
+                }
+                if let Some((map, crate::exploration::MapMode::Expanded)) = &self.directory_map {
+                    return Some(crate::text::directory_map::overlay_with_controls(
+                        map,
+                        crate::exploration::MapMode::Expanded,
+                        ui_w,
+                        ui_h,
+                        self.route_pan,
+                        crate::text::directory_map::Controls {
+                            selection: self.map_selection.as_ref(),
+                            history_offset: self.map_history_offset,
+                            confirm_travel: self.map_confirm_travel,
+                            hover: self.map_hover,
+                        },
+                    ));
+                }
+                let (map, mode) = self.exploration.as_ref()?;
+                (*mode == crate::exploration::MapMode::Expanded).then(|| {
+                    crate::text::exploration_map::route_overlay_state(
+                        map,
+                        *mode,
+                        ui_w,
+                        ui_h,
+                        self.route_pan,
+                        self.route_back,
+                    )
+                })
+            })
+            .filter(|ui| !ui.is_empty());
+        // Inspector mesh vertices carry finite (0,1) depth; flat UI remains z=0.
+        // Split by whole triangles, never by material: untextured model faces
+        // require the same depth test as textured faces.
+        let inspector = if self.menu.is_none() && self.inventory_overlay.is_some() {
+            menu.as_ref()
+                .map(|ui| {
+                    ui.as_chunks::<3>()
+                        .0
+                        .iter()
+                        .filter(|t| t.iter().all(|v| v.position[2] > 0.0 && v.position[2] < 1.0))
+                        .flatten()
+                        .copied()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+        let menu = menu
+            .map(|ui| {
+                if self.menu.is_none() && self.inventory_overlay.is_some() {
+                    ui.as_chunks::<3>()
+                        .0
+                        .iter()
+                        .filter(|t| !t.iter().all(|v| v.position[2] > 0.0 && v.position[2] < 1.0))
+                        .flatten()
+                        .copied()
+                        .collect::<Vec<_>>()
+                } else {
+                    ui
+                }
+            })
             .filter(|ui| !ui.is_empty());
         if let Some(menu) = &menu {
             let buffer = self
@@ -912,11 +1180,87 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            pass.set_pipeline(&self.ui_pipeline);
             pass.set_vertex_buffer(0, buffer.slice(..));
-            pass.draw(0..menu.len() as u32, 0..1);
+            let inventory = self.menu.is_none()
+                && (self.inventory_overlay.is_some() || !self.collection_overlay.is_empty());
+            for (range, material) in Self::batches(menu) {
+                if material == 0 {
+                    pass.set_pipeline(&self.ui_pipeline);
+                } else {
+                    let group = if inventory {
+                        ((material & 0x7fff_ffff) as usize)
+                            .checked_sub(1)
+                            .and_then(|i| self.item_materials.get(i))
+                    } else {
+                        self.materials.get((material & 0x7fff_ffff) as usize)
+                    };
+                    let Some(group) = group else {
+                        continue;
+                    };
+                    pass.set_pipeline(if material & 0x8000_0000 != 0 {
+                        &self.media_pipeline
+                    } else {
+                        &self.item_pipeline
+                    });
+                    pass.set_bind_group(0, &self.camera_group, &[]);
+                    pass.set_bind_group(1, group, &[]);
+                }
+                pass.draw(range, 0..1);
+            }
+        }
+        if !inspector.is_empty() {
+            let buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("depth-tested owned inspector item"),
+                    contents: bytemuck::cast_slice(&inspector),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("inventory item depth, independent of room"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            for (range, material) in Self::batches(&inspector) {
+                if material == 0 {
+                    pass.set_pipeline(&self.inspector_color_pipeline);
+                } else {
+                    let Some(group) = ((material & 0x7fff_ffff) as usize)
+                        .checked_sub(1)
+                        .and_then(|i| self.item_materials.get(i))
+                    else {
+                        continue;
+                    };
+                    pass.set_pipeline(if material & 0x8000_0000 != 0 {
+                        &self.inspector_media_pipeline
+                    } else {
+                        &self.inspector_texture_pipeline
+                    });
+                    pass.set_bind_group(0, &self.camera_group, &[]);
+                    pass.set_bind_group(1, group, &[]);
+                }
+                pass.draw(range, 0..1);
+            }
         }
         self.queue.submit([encoder.finish()]);
+        self.draw_editor(target)?;
         Ok(())
     }
     pub fn wait(&self) -> Result<()> {
@@ -1005,7 +1349,31 @@ impl Renderer {
             .collect();
         // The bitmap reader deliberately uses a small palette; scene diversity is
         // not a valid reader-visibility criterion. Still reject a uniform frame.
-        let minimum_colors = if world.reading { 2 } else { 20 };
+        let fullscreen_map = self.menu.is_none()
+            && self.address_entry.is_none()
+            && (self
+                .exploration
+                .as_ref()
+                .is_some_and(|(_, mode)| *mode == crate::exploration::MapMode::Expanded)
+                || self
+                    .directory_map
+                    .as_ref()
+                    .is_some_and(|(_, mode)| *mode == crate::exploration::MapMode::Expanded));
+        // Bitmap inventory UI, like readers/maps, deliberately has few colors.
+        // A present-but-empty overlay does not exempt ordinary room captures.
+        let inventory_ui = self
+            .inventory_overlay
+            .as_ref()
+            .is_some_and(|ui| !ui.is_empty());
+        // Floor-placement silhouettes deliberately use a flat two-state palette.
+        // Nonempty real overlay only; integrated probes separately require its
+        // green/red source-color pixels, not merely a nonuniform screenshot.
+        let placement_ui = !self.placement_overlay.is_empty();
+        let minimum_colors = if world.reading || fullscreen_map || inventory_ui || placement_ui {
+            2
+        } else {
+            20
+        };
         if unique.len() < minimum_colors {
             return Err(format!(
                 "GPU image suspiciously flat: {} colors",
@@ -1041,3 +1409,38 @@ impl Renderer {
 #[cfg(test)]
 #[path = "render_output_tests.rs"]
 mod output_tests;
+#[cfg(test)]
+mod sidebar_feedback_tests {
+    #[test]
+    fn feedback_uses_the_reserved_content_geometry() {
+        let instance = super::instance();
+        let adapter = pollster::block_on(super::adapter(&instance, None)).unwrap();
+        let mut renderer = pollster::block_on(super::Renderer::new(
+            &adapter,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            [960, 640],
+            &[],
+        ))
+        .unwrap();
+        renderer.sidebar_enabled = true;
+        renderer.sidebar_snapshot = Some(std::sync::Arc::new(crate::local_explorer::Snapshot {
+            folder: "/Fixture".into(),
+            entries: vec![],
+        }));
+        let snapshot = super::web_feedback::Snapshot {
+            mode: super::web_feedback::Mode::FailureSettled,
+            destination: "https://example.org/failed".into(),
+            reason: "Owned synthetic prior-web feedback".into(),
+            ..Default::default()
+        };
+        renderer.set_web_feedback(&snapshot, false);
+        let mut expected = vec![];
+        snapshot.paint(&mut expected, [720, 640], false);
+        assert!(!expected.is_empty());
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&renderer.web_feedback_vertices),
+            bytemuck::cast_slice::<_, u8>(&expected),
+            "feedback must match the content viewport that rasterizes it"
+        );
+    }
+}

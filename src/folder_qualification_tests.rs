@@ -1,7 +1,8 @@
 //! Qualification of implemented local navigation. Synthetic App input, not OS input.
 //! All disk enumeration is confined to exclusively created fixtures (never `/`).
 // Separate ignored semantic proof; the generic matrix below remains unchanged.
-// Private external GPU supplement is not part of this public product export.
+#[path = "folder_sparse_tests.rs"]
+mod sparse;
 use super::*;
 use hair::{
     folder_scene,
@@ -79,6 +80,8 @@ fn aim(a: &mut App, id: &str) {
         .unwrap_or_else(|| panic!("missing {id}"));
     let n = host.portal_inward(id); // documents retain the legacy +Z approach
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0] + 1.05 * n[0], anchor.at[2] + 1.05 * n[1]],
         yaw: (-n[0]).atan2(n[1]),
         pitch: ((anchor.at[1] + anchor.size[1] * 0.5 - 1.65) / 1.05).atan(),
@@ -118,6 +121,8 @@ fn aim_absent_boundary(a: &mut App, id: &str) {
     assert!(!host.anchors.iter().any(|v| v.id == id));
     assert!(!host.wall_apertures.iter().any(|v| v.anchor == id));
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0] + 1.05 * n[0], anchor.at[2] + 1.05 * n[1]],
         yaw: (-n[0]).atan2(n[1]),
         pitch: ((anchor.at[1] + anchor.size[1] * 0.5 - 1.65) / 1.05).atan(),
@@ -292,7 +297,14 @@ fn synthetic_root_has_no_parent_continuation_or_eligible_false_action() {
             let anchor = control.anchors.iter().find(|a| a.id == id).unwrap();
             let n = control.portal_inward(id);
             let p = Pose {
-                position: [anchor.at[0] + 1.05 * n[0], anchor.at[2] + 1.05 * n[1]],
+                eye_offset: 1.65,
+                feet_y: 0.0,
+                // Project the control portal's boundary-relative location into
+                // this empty root's own bounds, not the larger control room.
+                position: [
+                    anchor.at[0] + 1.05 * n[0] + (control.room[2] - host.room[2]) * n[0],
+                    anchor.at[2] + 1.05 * n[1] + (control.room[3] - host.room[3]) * n[1],
+                ],
                 yaw: (-n[0]).atan2(n[1]),
                 pitch: ((anchor.at[1] + anchor.size[1] * 0.5 - 1.65) / 1.05).atan(),
             };
@@ -447,7 +459,18 @@ fn u_and_back_keep_history_pages_and_distinct_arrival_policies_aligned() {
     f.children(30);
     let before = inventory(&f.0);
     let mut a = app(&f.0);
-    tap(&mut a, KeyCode::KeyM);
+    // Listing moved from M to Settings; M is now a modal directory map.
+    tap(&mut a, KeyCode::Escape);
+    tap(&mut a, KeyCode::ArrowDown);
+    tap(&mut a, KeyCode::Enter);
+    tap(&mut a, KeyCode::Enter); // Settings > Player Settings
+    for _ in 0..3 {
+        tap(&mut a, KeyCode::ArrowDown);
+    }
+    tap(&mut a, KeyCode::Enter);
+    tap(&mut a, KeyCode::Escape);
+    tap(&mut a, KeyCode::Escape);
+    tap(&mut a, KeyCode::Escape);
     let collapsed = a.world.tree_collapsed;
     find(&mut a, OsStr::new("Child 024"));
     let departure = pose(&a);
@@ -1028,6 +1051,8 @@ fn retain_capture(
 // CPU framing test below checks it against the CURRENT rear inward direction.
 fn context_pose() -> Pose {
     Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [-3.0, 5.0],
         yaw: 0.0,
         pitch: -0.08,
@@ -1094,7 +1119,8 @@ fn context_camera_frames_last_page_folder_and_real_file_objects_without_claiming
     assert!(aimed.is_some());
     let camera = context_pose();
     let host = &a.themes[a.theme_index].host;
-    assert_eq!(host.room, [-10.5, -6.0, 10.5, 6.0]);
+    // 25 immediate folders enlarge only X; the two files keep minimum depth.
+    assert_eq!(host.room, [-14.0, -6.0, 14.0, 6.0]);
     let inward = host.portal_inward(folder_scene::PARENT_PORTAL);
     assert_eq!(
         inward,
@@ -1253,6 +1279,8 @@ fn retained_current_source_local_metal_matrix() {
                 tap(&mut a, KeyCode::KeyM);
             }
             a.pose = Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: a.themes[a.theme_index].host.spawn,
                 yaw: 0.0,
                 pitch: -0.13,

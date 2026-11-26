@@ -1,0 +1,14 @@
+Greenleaf Reading Room — explicit local three-space example, HAIR0.4.0 unreleased
+
+Development launch from any directory (requires the built project executable):
+HAIR_RESOURCE_ROOT=/Users/angel/Developer/hair /Users/angel/Developer/hair/target/release/hair --site /Users/angel/Developer/hair/examples/GreenleafReadingRoom-spaces
+
+This is a new derivative, not an edit to the old single-room example. See PROVENANCE.txt. Three fictional pages/original notice PNG, deterministic authored geometry; no private model/network/live group.
+
+At entry you face into the reading room near its noticeboard door. WASD/click mouse-look approaches the station. E reads the named green marker. Escape closes. Turn toward the west-side door for noticeboard or east-side door for workshop notes; E enters the prompt's destination. Each destination is a different bounded room, not the old current-document room relabelled. Return doors bring you near their connecting door, facing inward; R explicitly resets entry outside the reader.
+
+Tab / Shift+Tab chooses nearby visible world markers, not distant/global destinations. In the reader it cycles actual page links; E follows a local page using that page's owning space/default arrival. A self-link also closes/resets to the default arrival. Unsupported external/image links remain labelled and are not opened. M collapses/expands the informational page tree; the separate SPACE line identifies the current room. Multiple pages in one space would remain distinct page rows. T cycles appearances without rearranging shared host geometry/routes/anchors, moving camera or discarding reader/link selection. Q exits.
+
+Host-scene.toml version2 declares exact page ownership, document and door bindings and named arrivals. Site-navigation.toml declares page hierarchy, not physical room topology. Keep every loaded Markdown page declared exactly once in each relevant membership; do not add a README.md without updating host/navigation declarations. Unknown/malformed intent refuses rather than falling back or rewriting your files. Restart after edits. Packs/Workshop remain appearance-only; the Workshop stage is not site geometry and is not exported.
+
+Only current room renders; doors switch locally, not seamless physics. General --headless-smoke and --window-smoke are older single-room abstract diagnostics, not multispace qualification. Actual automated E/Tab/M/T/focus/reader/door proof uses the optimized Rust binary-test adapter with explicit fresh scratch outputs, recorded under hair-greenleaf-spaces/finish-greenleaf-captures/. No native/human/package/Neo acceptance; parent capture inspection/fresh source review next.

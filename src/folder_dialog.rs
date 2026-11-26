@@ -3,6 +3,14 @@ use hair::Result;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 pub fn present() -> Result<Option<PathBuf>> {
+    present_with_purpose(false)
+}
+#[cfg(target_os = "macos")]
+pub fn present_storage() -> Result<Option<PathBuf>> {
+    present_with_purpose(true)
+}
+#[cfg(target_os = "macos")]
+fn present_with_purpose(storage: bool) -> Result<Option<PathBuf>> {
     use objc2::rc::autoreleasepool;
     use objc2_app_kit::{NSModalResponseCancel, NSModalResponseOK, NSOpenPanel};
     use objc2_foundation::{MainThreadMarker, NSString};
@@ -23,10 +31,10 @@ pub fn present() -> Result<Option<PathBuf>> {
             panel.setResolvesAliases(false);
             panel.setTreatsFilePackagesAsDirectories(false);
             panel.setTitle(Some(&NSString::from_str(
-                "Choose starting folder (read-only)",
+                if storage { "Choose existing private Documents cache" } else { "Choose starting folder (read-only)" },
             )));
-            panel.setPrompt(Some(&NSString::from_str("Explore folder")));
-            panel.setMessage(Some(&NSString::from_str("Immediate entries only. U may go to Parent beyond this start. No files are changed.")));
+            panel.setPrompt(Some(&NSString::from_str(if storage { "Adopt cache" } else { "Explore folder" })));
+            panel.setMessage(Some(&NSString::from_str(if storage { "Existing owned private (0700) empty or compatible versioned cache only. Adopts location; no move/copy/merge/delete of previous cache or originals." } else { "Immediate entries only. U may go to Parent beyond this start. No files are changed." })));
             let response = panel.runModal();
             if response == NSModalResponseCancel {
                 return Ok(None);
@@ -50,6 +58,10 @@ pub fn present() -> Result<Option<PathBuf>> {
 #[cfg(not(target_os = "macos"))]
 pub fn present() -> Result<Option<PathBuf>> {
     Err("Native folder chooser requires macOS; use --folder PATH on this platform".into())
+}
+#[cfg(not(target_os = "macos"))]
+pub fn present_storage() -> Result<Option<PathBuf>> {
+    Err("Native cache directory chooser requires macOS".into())
 }
 #[cfg(all(test, target_os = "macos"))]
 mod tests {

@@ -72,11 +72,16 @@ pub fn display(value: &std::ffi::OsStr) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BoundEntry {
     pub index: usize,
+    /// Global generated-slot rank excluding the reserved layout directory.
+    /// Raw listing identity/page membership continues to use `index`.
+    pub slot_index: usize,
     pub entry: Entry,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub bindings: BTreeMap<String, BoundEntry>,
+    /// Immediate snapshot membership across all pages, not a later live listing.
+    pub file_names: std::collections::BTreeSet<std::ffi::OsString>,
     pub continuations: BTreeMap<String, Continuation>,
     /// A filesystem action, never a raw entry or same-folder continuation.
     pub parent: Option<String>,
@@ -169,6 +174,22 @@ pub fn build(
     collapsed: bool,
 ) -> Result<(World, HostScene)> {
     let count = snapshot.entries.len();
+    // Minimum footprint keeps the existing 12-slot file grid and human-scale doors.
+    // Immediate directory counts add lateral breathing room; files add depth.
+    // Bounded, folder-level dimensions are identical on every continuation page.
+    let folders = snapshot
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Folder)
+        .count();
+    let files = snapshot
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::File)
+        .count();
+    // Leave the inert portal's complete envelope inside the authored v2 16m cap.
+    let half_x = 10.5 + folders.min(11).saturating_sub(4) as f32 * 0.5;
+    let half_z = 6.0 + files.min(24).saturating_sub(4) as f32 * 0.2;
     let pages = count.div_ceil(PAGE_SIZE).max(1);
     let page = requested_page.min(pages - 1);
     let has_next = page + 1 < pages;
@@ -182,16 +203,19 @@ pub fn build(
     let mut host = HostScene {
         version: 2,
         name: "Local folder page".into(),
+        file_placements: Default::default(),
+        file_anchors: Default::default(),
+        decorations: Default::default(),
         // Stable front child slots, rear entry and opposing side continuations.
         // Freestanding doors retain their host-owned basis; the platform has no shell.
-        room: [-10.5, -6.0, 10.5, 6.0],
-        spawn: [0.0, 5.65],
+        room: [-half_x, -half_z, half_x, half_z],
+        spawn: [0.0, half_z - 0.35],
         height: 3.0,
         anchors: vec![
             Anchor {
                 id: "vocabulary-document".into(),
                 role: "document".into(),
-                at: [9.5, 0.0, 4.0],
+                at: [half_x - 1.0, 0.0, half_z - 2.0],
                 size: [0.6, 0.8, 0.5],
                 binding: "explicit-page".into(),
             },
@@ -201,9 +225,9 @@ pub fn build(
                 // An inert terminal sentinel stays outside the open front,
                 // rather than cutting an unused hole in a closed side wall.
                 at: if has_next {
-                    [11.2, 0.0, 0.0]
+                    [half_x + 0.7, 0.0, 0.0]
                 } else {
-                    [10.8, 0.0, -6.5]
+                    [half_x + 0.3, 0.0, -half_z - 0.5]
                 },
                 size: if has_next {
                     [PORTAL_SIZE[2], PORTAL_SIZE[1], PORTAL_SIZE[0]]
@@ -215,7 +239,7 @@ pub fn build(
             Anchor {
                 id: "vocabulary-image".into(),
                 role: "image".into(),
-                at: [0.0, 0.0, -7.5],
+                at: [0.0, 0.0, -half_z - 1.5],
                 size: [0.6, 0.8, 0.1],
                 binding: "current-image".into(),
             },
@@ -237,7 +261,7 @@ pub fn build(
         host.anchors.push(Anchor {
             id: id.clone(),
             role: "portal".into(),
-            at: [0.0, 0.0, 6.7],
+            at: [0.0, 0.0, half_z + 0.7],
             size: PORTAL_SIZE,
             binding: "explicit-door".into(),
         });
@@ -252,7 +276,7 @@ pub fn build(
         host.anchors.push(Anchor {
             id: PREVIOUS_PORTAL.into(),
             role: "portal".into(),
-            at: [-11.2, 0.0, 0.0],
+            at: [-half_x - 0.7, 0.0, 0.0],
             size: [PORTAL_SIZE[2], PORTAL_SIZE[1], PORTAL_SIZE[0]],
             binding: "explicit-door".into(),
         });
@@ -264,6 +288,10 @@ pub fn build(
         });
     }
     let mut bindings = BTreeMap::new();
+    let layout_index = snapshot
+        .entries
+        .iter()
+        .position(|e| e.kind == Kind::Folder && e.name == ".hair-layout");
     for (slot, (index, entry)) in snapshot
         .entries
         .iter()
@@ -274,15 +302,17 @@ pub fn build(
     {
         let folder = entry.kind == Kind::Folder;
         let anchor = format!("entry-{slot}");
+        let slot_index = index - usize::from(layout_index.is_some_and(|root| root < index));
+        let file_slot = slot_index % PAGE_SIZE;
         let at = if folder {
             // Twelve front-facing entry slots at 1.6m pitch, clear of the
             // opposing side doors. Keep capacity and human-scale envelopes.
-            [-8.8 + slot as f32 * 1.6, 0.0, -6.5]
+            [-8.8 + slot as f32 * 1.6, 0.0, -half_z - 0.5]
         } else {
             [
-                -4.5 + (slot % 4) as f32 * 3.0,
+                -4.5 + (file_slot % 4) as f32 * 3.0,
                 0.0,
-                -3.0 + (slot / 4) as f32 * 3.0,
+                -3.0 + (file_slot / 4) as f32 * 3.0,
             ]
         };
         host.anchors.push(Anchor {
@@ -301,12 +331,19 @@ pub fn build(
             anchor,
             BoundEntry {
                 index,
+                slot_index,
                 entry: entry.clone(),
             },
         );
     }
     // Same envelope, collision and route checks as other production rooms.
     host = HostScene::parse(&toml::to_string(&host).map_err(|e| e.to_string())?)?;
+    // Runtime identity is established only after authored-format validation.
+    host.file_anchors = bindings
+        .iter()
+        .filter(|(_, b)| b.entry.kind == Kind::File)
+        .map(|(id, _)| id.clone())
+        .collect();
     // Orientation is local: keep the literal source ID for highlight/inspection,
     // but spend the visible rows on this folder and the contents of this room.
     let mut rows = vec![Row {
@@ -340,6 +377,8 @@ pub fn build(
     }
     let view = View {
         bindings,
+        file_names: snapshot.entries.iter().filter(|e| e.kind == Kind::File)
+            .map(|e| e.name.clone()).collect(),
         continuations,
         parent,
         page,
@@ -433,6 +472,8 @@ mod tests {
         let (world, host) = build(&snapshot, 0, false).unwrap();
         let a = host.anchors.iter().find(|a| a.id == "entry-0").unwrap();
         let pose = crate::Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0], a.at[2] + 1.0],
             yaw: 0.0,
             pitch: ((a.size[1] * 0.5 - 1.65) / 1.0).atan(),

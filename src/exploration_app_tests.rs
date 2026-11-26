@@ -1,6 +1,122 @@
 use super::*;
 use hair::exploration::{Connection, MapMode, RoomId};
 #[test]
+fn route_map_modal_actions_and_history_destination_are_independent_of_recent_visits() {
+    let mut a = app();
+    let first = a.world.current.clone();
+    a.request_web("https://example.org/two", web_native::Mode::Follow)
+        .unwrap();
+    finish(&mut a);
+    assert_eq!(
+        a.web.as_ref().unwrap().back_room_id(),
+        Some(RoomId::new(&first, 0))
+    );
+    let second = a.world.current.clone();
+    a.request_web(&second, web_native::Mode::Follow).unwrap();
+    finish(&mut a);
+    assert_eq!(
+        a.web.as_ref().unwrap().back_room_id(),
+        Some(RoomId::new(&second, 0)),
+        "self-follow has a same-room held Back destination, not the previous distinct visit"
+    );
+    let rooms = a.exploration.rooms.len();
+    let history = a.web.as_ref().unwrap().history.len();
+    let pose = a.pose;
+    tap(&mut a, KeyCode::KeyM);
+    for key in [
+        KeyCode::KeyR,
+        KeyCode::F5,
+        KeyCode::KeyE,
+        KeyCode::Tab,
+        KeyCode::KeyL,
+        KeyCode::KeyO,
+        KeyCode::KeyQ,
+        KeyCode::KeyT,
+        KeyCode::F8,
+    ] {
+        tap(&mut a, key);
+    }
+    assert_eq!(a.world.current, second);
+    assert_eq!(a.exploration.rooms.len(), rooms);
+    assert_eq!(a.web.as_ref().unwrap().history.len(), history);
+    assert!(a.address.is_none() && a.menu.is_none() && !a.chooser_pending && !a.input.captured);
+    assert_eq!(a.pose.position, pose.position);
+    assert_eq!(a.pose.yaw, pose.yaw);
+    assert_eq!(a.pose.pitch, pose.pitch);
+    tap(&mut a, KeyCode::ArrowRight);
+    assert_eq!(a.route_pan, [1, 0]);
+    a.key(KeyCode::KeyW, true, false).unwrap();
+    assert!(!a.input.forward);
+    a.key(KeyCode::ShiftLeft, true, false).unwrap();
+    tap(&mut a, KeyCode::KeyM);
+    a.key(KeyCode::ShiftLeft, false, false).unwrap();
+    assert!(!a.minimap_enabled);
+    assert_eq!(a.map_mode, MapMode::Expanded);
+    tap(&mut a, KeyCode::Escape);
+    assert_eq!(a.map_mode, MapMode::Hidden);
+    assert!(a.menu.is_none());
+    a.key(KeyCode::KeyW, true, true).unwrap();
+    assert!(
+        !a.input.forward,
+        "held map key must stay inert after closing"
+    );
+    a.key(KeyCode::KeyW, false, false).unwrap();
+    a.key(KeyCode::KeyW, true, false).unwrap();
+    assert!(a.input.forward);
+    a.key(KeyCode::KeyW, false, false).unwrap();
+    tap(&mut a, KeyCode::KeyM);
+    assert_eq!(a.route_pan, [0, 0]);
+    a.focus_changed(false);
+    tap(&mut a, KeyCode::KeyM);
+    assert_eq!(a.map_mode, MapMode::Expanded);
+    a.focus_changed(true);
+    tap(&mut a, KeyCode::Escape);
+    a.web.as_mut().unwrap().fetcher =
+        |_, _, _| panic!("Back must restore a held snapshot, never fetch");
+    tap(&mut a, KeyCode::KeyR);
+    assert_eq!(a.world.current, second);
+    assert_eq!(
+        a.web.as_ref().unwrap().back_room_id(),
+        Some(RoomId::new(&first, 0))
+    );
+}
+#[test]
+fn route_map_keys_keep_minimap_preference_independent_and_do_not_toggle_tree() {
+    let mut a = app();
+    let tree = a.world.tree_collapsed;
+    assert_eq!(a.map_mode, MapMode::Compact);
+    a.key(KeyCode::ShiftLeft, true, false).unwrap();
+    tap(&mut a, KeyCode::KeyM);
+    a.key(KeyCode::ShiftLeft, false, false).unwrap();
+    assert_eq!(
+        a.map_mode,
+        MapMode::Hidden,
+        "Shift M toggles minimap, not the listing"
+    );
+    assert_eq!(a.world.tree_collapsed, tree);
+    a.input.forward = true;
+    a.input.captured = true;
+    tap(&mut a, KeyCode::KeyM);
+    assert_eq!(a.map_mode, MapMode::Expanded);
+    assert!(!a.input.forward && !a.input.captured);
+    tap(&mut a, KeyCode::KeyM);
+    assert_eq!(
+        a.map_mode,
+        MapMode::Hidden,
+        "M closes to remembered minimap state"
+    );
+    a.key(KeyCode::ShiftRight, true, false).unwrap();
+    tap(&mut a, KeyCode::KeyM);
+    a.key(KeyCode::ShiftRight, false, false).unwrap();
+    assert_eq!(a.map_mode, MapMode::Compact);
+    tap(&mut a, KeyCode::KeyM);
+    assert_eq!(a.map_mode, MapMode::Expanded);
+    tap(&mut a, KeyCode::Escape);
+    assert_eq!(a.map_mode, MapMode::Compact);
+    assert!(a.menu.is_none());
+    assert_eq!(a.world.tree_collapsed, tree);
+}
+#[test]
 fn refresh_discloses_a_surviving_selected_door_moving_out_of_reach() {
     let mut a = app();
     a.web.as_mut().unwrap().fetcher =
@@ -23,6 +139,8 @@ fn refresh_discloses_a_surviving_selected_door_moving_out_of_reach() {
         .find(|x| x.id == door.anchor)
         .unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0], anchor.at[2] + 1.0],
         yaw: 0.0,
         pitch: -0.2,
@@ -77,6 +195,8 @@ fn explicit_refresh_rebuilds_shrinking_room_and_relocates_only_unsafe_pose() {
         finish(&mut a);
         let old_bounds = a.themes[a.theme_index].host.room;
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: if unsafe_pose {
                 [0.0, old_bounds[3] - 2.0]
             } else {
@@ -191,26 +311,24 @@ fn map_modes_are_contextual_and_do_not_steal_tab_or_reader_keys() {
     assert_eq!(a.map_mode, MapMode::Expanded);
     a.key(KeyCode::KeyM, false, false).unwrap();
     tap(&mut a, KeyCode::KeyM);
-    assert_eq!(a.map_mode, MapMode::Hidden);
-    tap(&mut a, KeyCode::KeyM);
     assert_eq!(a.map_mode, MapMode::Compact);
     a.key(KeyCode::ShiftLeft, true, false).unwrap();
     tap(&mut a, KeyCode::KeyM);
     a.key(KeyCode::ShiftLeft, false, false).unwrap();
-    assert_ne!(a.world.tree_collapsed, tree);
-    assert_eq!(a.map_mode, MapMode::Compact);
+    assert_eq!(a.world.tree_collapsed, tree);
+    assert_eq!(a.map_mode, MapMode::Hidden);
     a.world.reading = true;
     let tree = a.world.tree_collapsed;
     tap(&mut a, KeyCode::KeyM);
-    assert_eq!(a.world.tree_collapsed, !tree);
-    assert_eq!(a.map_mode, MapMode::Compact);
+    assert_eq!(a.world.tree_collapsed, tree);
+    assert_eq!(a.map_mode, MapMode::Hidden);
     a.world.reading = false;
     tap(&mut a, KeyCode::Escape);
     tap(&mut a, KeyCode::KeyM);
-    assert_eq!(a.map_mode, MapMode::Compact);
+    assert_eq!(a.map_mode, MapMode::Hidden);
     tap(&mut a, KeyCode::Escape);
     tap(&mut a, KeyCode::KeyL);
     tap(&mut a, KeyCode::KeyM);
-    assert_eq!(a.map_mode, MapMode::Compact);
+    assert_eq!(a.map_mode, MapMode::Hidden);
     tap(&mut a, KeyCode::Escape);
 }

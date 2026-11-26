@@ -9,6 +9,8 @@ fn world() -> World {
 }
 fn read_pose() -> Pose {
     Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.8],
         yaw: 0.0,
         pitch: -0.5,
@@ -73,6 +75,8 @@ fn rendered_room_shell_occludes_side_portal() {
         .unwrap();
     portal.at = [4.1, 0.1, 0.0];
     let pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [3.0, 0.0],
         yaw: std::f32::consts::FRAC_PI_2,
         pitch: -0.2,

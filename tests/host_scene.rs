@@ -36,6 +36,8 @@ fn explicit_host_scene_controls_all_skins_and_malformed_intent_refuses() {
     };
     assert_eq!(markers(&a), markers(&b));
     let pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [2.0, 2.0],
         yaw: 0.5,
         pitch: -0.4,

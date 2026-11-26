@@ -19,6 +19,40 @@ pub struct Target {
 pub fn resolve(host: &HostScene, pose: &Pose, world: &World) -> Option<Target> {
     resolve_with_windows(host, pose, world, &[])
 }
+/// Independent decoration inspection; never a file or acquisition binding.
+pub fn decoration_target<'a>(host: &'a HostScene, pose: &Pose, world: &World) -> Option<&'a crate::placement_store::Decoration> {
+    if !pose.position.into_iter().chain([pose.yaw, pose.pitch, pose.feet_y]).all(f32::is_finite) {
+        return None;
+    }
+    let eye = Vec3::new(pose.position[0], pose.eye_height(), pose.position[1]);
+    let direction = Vec3::new(pose.yaw.sin() * pose.pitch.cos(), pose.pitch.sin(), -pose.yaw.cos() * pose.pitch.cos());
+    let end = eye + direction * 2.5;
+    let walls = host.walls();
+    let bases = host.file_bases();
+    host.decorations.values().filter_map(|d| {
+        let b = d.bounds().ok()?;
+        let centre = Vec3::from_array(b.at) + Vec3::Y * b.size[1] * 0.5;
+        let (hit, _) = segment_box_interval(eye, end, b.at, b.size)?;
+        if centre.distance(eye) > 2.5 {
+            return None;
+        }
+        // Occlusion uses this same ray and stops at the target's near face.
+        let before = |at, size| segment_box_interval(eye, end, at, size)
+            .is_some_and(|(enter, exit)| enter < hit - 0.0001 && exit > 0.0001);
+        if host.geometry.iter().chain(&host.overhead).chain(&walls).any(|g| before(g.at, g.size))
+            || host.anchors.iter().filter(|a| matches!(a.role.as_str(), "document" | "decoration") && !host.file_placements.contains_key(&a.id))
+                // Share file aim/occlusion policy, including the generated upper
+                // item only for a real local-file binding, never generic furniture.
+                .map(|a| aim_anchor(host, a, world)).any(|a| before(a.at, a.size))
+            || bases.iter().any(|(_, g)| before(g.at, g.size))
+            || host.decorations.values().filter(|other| other.placement_id != d.placement_id).any(|other| {
+                other.bounds().is_ok_and(|g| before(g.at, g.size))
+            })
+            || host.file_placements.values().any(|p| p.position.file_bounds().is_ok_and(|g| before(g.at, g.size)))
+        { return None; }
+        Some((hit, d))
+    }).min_by(|(a, _), (b, _)| a.total_cmp(b)).map(|(_, d)| d)
+}
 /// App-owned typed bindings, never publisher text or an invented destination.
 /// No replay, generation or acquisition is performed by targeting.
 pub fn resolve_with_windows(
@@ -28,13 +62,13 @@ pub fn resolve_with_windows(
     windows: &[crate::web::WindowDoor],
 ) -> Option<Target> {
     if let Some(selected) = &world.explicit_target
-        && let Some(target) = candidates(host, pose, world, windows, 0.5)
+        && let Some(target) = candidates(host, pose, world, windows, 0.5, true)
             .into_iter()
             .find(|t| t == selected)
     {
         return Some(target);
     }
-    candidates(host, pose, world, windows, 0.9)
+    candidates(host, pose, world, windows, 0.9, false)
         .into_iter()
         .next()
 }
@@ -48,7 +82,7 @@ pub fn refresh_with_windows(
     windows: &[crate::web::WindowDoor],
 ) {
     if let Some(selected) = world.explicit_target.as_ref() {
-        world.explicit_target = candidates(host, pose, world, windows, 0.5)
+        world.explicit_target = candidates(host, pose, world, windows, 0.5, true)
             .into_iter()
             .find(|t| t.anchor == selected.anchor && t.page == selected.page);
     }
@@ -70,14 +104,14 @@ pub fn cycle_with_windows(
     if let Some(t) = &current
         && crate::web::portals::cycle(world, &t.anchor, reverse)
     {
-        let next = candidates(host, pose, world, windows, 0.5)
+        let next = candidates(host, pose, world, windows, 0.5, true)
             .into_iter()
             .find(|n| n.anchor == t.anchor);
         world.explicit_target = next.clone();
         world.interaction = next;
         return;
     }
-    let mut eligible = candidates(host, pose, world, windows, 0.5);
+    let mut eligible = candidates(host, pose, world, windows, 0.5, true);
     eligible.sort_by(|a, b| a.anchor.cmp(&b.anchor));
     let index = current
         .as_ref()
@@ -97,38 +131,85 @@ pub fn cycle_with_windows(
     world.explicit_target = next.clone();
     world.interaction = next;
 }
+fn aim_anchor(
+    host: &HostScene,
+    a: &crate::host_scene::Anchor,
+    world: &World,
+) -> crate::host_scene::Anchor {
+    let mut target = host.target_anchor(a);
+    // One envelope for aim AND occlusion. This is not a new walking solid.
+    if !host.file_placements.contains_key(&a.id)
+        && world
+            .folder_view
+            .as_ref()
+            .and_then(|v| v.bindings.get(&a.id))
+            .is_some_and(|b| b.entry.kind == crate::local_explorer::Kind::File)
+    {
+        target.size[1] += 0.12 + 0.85;
+    }
+    target
+}
 fn candidates(
     host: &HostScene,
     pose: &Pose,
     world: &World,
     windows: &[crate::web::WindowDoor],
     min_aim: f32,
+    include_overlapped: bool,
 ) -> Vec<Target> {
     if world.reading
         || !pose
             .position
             .iter()
-            .chain([&pose.yaw, &pose.pitch])
+            .chain([&pose.yaw, &pose.pitch, &pose.feet_y])
             .all(|v| v.is_finite())
     {
         return Vec::new();
     }
-    let eye = Vec3::new(pose.position[0], 1.65, pose.position[1]);
+    let eye = Vec3::new(pose.position[0], pose.eye_height(), pose.position[1]);
     let direction = Vec3::new(
         pose.yaw.sin() * pose.pitch.cos(),
         pose.pitch.sin(),
         -pose.yaw.cos() * pose.pitch.cos(),
     );
     let walls = host.walls();
+    let mut occluders = host
+        .anchors
+        .iter()
+        .filter(|a| !host.file_placements.contains_key(&a.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    occluders.extend(
+        host.anchors
+            .iter()
+            .filter(|a| {
+                host.file_placements.contains_key(&a.id)
+                    || world
+                        .folder_view
+                        .as_ref()
+                        .and_then(|v| v.bindings.get(&a.id))
+                        .is_some_and(|b| b.entry.kind == crate::local_explorer::Kind::File)
+            })
+            .map(|a| aim_anchor(host, a, world)),
+    );
     let mut eligible = Vec::new();
     for anchor in host
         .anchors
         .iter()
         .filter(|a| matches!(a.role.as_str(), "document" | "portal"))
     {
+        let target = aim_anchor(host, anchor, world);
+        let anchor = &target;
         let centre = Vec3::from_array(anchor.at) + Vec3::Y * anchor.size[1] * 0.5;
         let delta = centre - eye;
-        let reach = (pose.position[0] - anchor.at[0]).hypot(pose.position[1] - anchor.at[2]);
+        // Preserve the historical planar reach when the target overlaps the
+        // player's body, but never activate a distant floor object from above.
+        let vertical_gap = (pose.feet_y - anchor.at[1] - anchor.size[1])
+            .max(anchor.at[1] - pose.feet_y - crate::player::body_height(host))
+            .max(0.0);
+        let reach = (pose.position[0] - anchor.at[0])
+            .hypot(pose.position[1] - anchor.at[2])
+            .hypot(vertical_gap);
         let aim = delta.normalize_or_zero().dot(direction);
         if reach >= 1.7 || aim < min_aim {
             continue;
@@ -139,13 +220,30 @@ fn candidates(
             .chain(host.overhead.iter())
             .chain(walls.iter())
             .any(|g| segment_hits_box(eye, centre, g.at, g.size))
-            || host
-                .anchors
+            || host.decoration_bounds().any(|g| segment_hits_box(eye, centre, g.at, g.size))
+            || occluders
                 .iter()
                 .filter(|a| {
                     a.id != anchor.id && matches!(a.role.as_str(), "document" | "decoration")
                 })
-                .any(|a| segment_hits_box(eye, centre, a.at, a.size));
+                .any(|a| {
+                    // Only an explicit local-file selection can look inside an
+                    // intersecting pile. Ordinary aim, portals, separated objects
+                    // and structural walls retain their occlusion contract.
+                    let same_pile = include_overlapped
+                        && world
+                            .folder_view
+                            .as_ref()
+                            .and_then(|v| v.bindings.get(&anchor.id))
+                            .is_some_and(|b| b.entry.kind == crate::local_explorer::Kind::File)
+                        && [0, 2].into_iter().all(|axis| {
+                            (a.at[axis] - anchor.at[axis]).abs()
+                                < (a.size[axis] + anchor.size[axis]) * 0.5
+                        })
+                        && a.at[1] < anchor.at[1] + anchor.size[1]
+                        && anchor.at[1] < a.at[1] + a.size[1];
+                    !same_pile && segment_hits_box(eye, centre, a.at, a.size)
+                });
         if occluded {
             continue;
         }
@@ -307,6 +405,10 @@ fn candidates(
 // Slab intersection against bottom-centred host boxes, before the target centre.
 // Fixed work: three axes per box; no mesh traversal or appearance dependency.
 pub(crate) fn segment_hits_box(from: Vec3, to: Vec3, at: [f32; 3], size: [f32; 3]) -> bool {
+    segment_box_interval(from, to, at, size)
+        .is_some_and(|(enter, exit)| enter < 0.9999 && exit > 0.0001)
+}
+fn segment_box_interval(from: Vec3, to: Vec3, at: [f32; 3], size: [f32; 3]) -> Option<(f32, f32)> {
     let min = Vec3::from_array(at) - Vec3::new(size[0] * 0.5, 0.0, size[2] * 0.5);
     let max = min + Vec3::from_array(size);
     let delta = to - from;
@@ -314,7 +416,7 @@ pub(crate) fn segment_hits_box(from: Vec3, to: Vec3, at: [f32; 3], size: [f32; 3
     for axis in 0..3 {
         if delta[axis].abs() < 0.000001 {
             if from[axis] < min[axis] || from[axis] > max[axis] {
-                return false;
+                return None;
             }
         } else {
             let a = (min[axis] - from[axis]) / delta[axis];
@@ -322,9 +424,9 @@ pub(crate) fn segment_hits_box(from: Vec3, to: Vec3, at: [f32; 3], size: [f32; 3
             enter = enter.max(a.min(b));
             exit = exit.min(a.max(b));
             if enter > exit {
-                return false;
+                return None;
             }
         }
     }
-    enter < 0.9999 && exit > 0.0001
+    Some((enter, exit))
 }

@@ -433,6 +433,8 @@ fn retained_png_before_e_has_source_pixels_inside_document_envelope() {
         assert_eq!(a.role, "document");
         let distance = 1.25_f32;
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0], a.at[2] + a.size[2] * 0.5 + distance],
             yaw: 0.0,
             pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / distance).atan(),
@@ -498,7 +500,8 @@ fn retained_png_before_e_has_source_pixels_inside_document_envelope() {
             "preview cannot change anchors/collision/routes"
         );
         host.check_routes(&[app.pose.position]).unwrap();
-        assert!(host.blocked([a.at[0], a.at[2]]) && !host.blocked(app.pose.position));
+        assert!(host.file_anchors.contains(&a.id));
+        assert!(!host.blocked([a.at[0], a.at[2]]) && !host.blocked(app.pose.position));
         assert_eq!(
             app.world.folder_view.as_ref().unwrap(),
             &view,

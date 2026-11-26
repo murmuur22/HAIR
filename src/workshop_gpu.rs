@@ -7,7 +7,7 @@ pub struct WorkshopGpu {
     painter: egui_wgpu::Renderer,
     preview: wgpu::TextureView,
     preview_id: egui::TextureId,
-    revision: Option<u64>,
+    revision: Option<(u64, u64)>,
 }
 impl WorkshopGpu {
     pub async fn new(
@@ -81,10 +81,18 @@ impl WorkshopGpu {
             app.ui(ui, app.preview.as_ref().map(|_| self.preview_id))
         });
         if let Some(theme) = &app.preview {
-            if self.revision != Some(app.revision) {
+            if self.revision != Some((app.revision, app.view_revision)) {
                 self.shared.set_theme_appearance(theme)?;
-                self.shared.set_scene(&theme.vertices);
-                self.revision = Some(app.revision);
+                if let Some((mut mesh, textures)) = app.catalog_inspection()? {
+                    // Isolated render-only inspection avoids occlusion by legacy
+                    // role furniture without changing the loaded/exported host.
+                    crate::scene::cuboid(&mut mesh, [0., -0.05, 0.], [7.5, 0.1, 7.5], [0.3; 3]);
+                    self.shared.set_materials(&textures)?;
+                    self.shared.set_scene(&mesh);
+                } else {
+                    self.shared.set_scene(&theme.vertices);
+                }
+                self.revision = Some((app.revision, app.view_revision));
             }
             if app.camera.free_fly {
                 self.shared

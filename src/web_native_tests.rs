@@ -324,6 +324,8 @@ fn web_portals_expose_upstream_identity_and_history_not_folder_parent() {
             .find(|x| x.id == door.anchor)
             .unwrap();
         let pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [anchor.at[0], -2.8],
             yaw: 0.0,
             pitch: -0.2,
@@ -367,6 +369,8 @@ fn landmark_app() -> App {
 fn web_refresh_preserves_safe_camera_reader_selection_and_surviving_landmarks() {
     let mut a = landmark_app();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [2.0, 1.0],
         yaw: 0.3,
         pitch: -0.2,

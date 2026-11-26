@@ -1,4 +1,4 @@
-version = 2
+version = 3
 name = "office"
 
 [[roles]]
@@ -24,3 +24,35 @@ max_extent = 3.0
 scale = 2.0
 yaw_degrees = 0.0
 pivot = [0.0, 0.0, 0.0]
+
+[[decorations.assets]]
+id = "office-chair"
+file = "chairDesk.glb"
+max_extent = 3.0
+scale = 1.0
+yaw_degrees = 0.0
+pivot = [0.0, 0.0, 0.0]
+
+[[decorations.assets]]
+id = "office-desk"
+file = "desk.glb"
+max_extent = 3.0
+scale = 1.0
+yaw_degrees = 0.0
+pivot = [0.0, 0.0, 0.0]
+
+[[decorations.entries]]
+id = "chair"
+tag = "hair.seating.chair"
+asset = "office-chair"
+name = "Desk chair"
+[decorations.entries.defaults]
+collision = true
+
+[[decorations.entries]]
+id = "desk"
+tag = "hair.furniture.desk"
+asset = "office-desk"
+name = "Writing desk"
+[decorations.entries.defaults]
+collision = true

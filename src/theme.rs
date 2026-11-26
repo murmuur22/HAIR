@@ -22,6 +22,8 @@ struct Manifest {
     surfaces: Vec<crate::materials::Surface>,
     #[serde(default)]
     sky: Option<crate::sky::SkySpec>,
+    #[serde(default)]
+    decorations: Option<crate::decoration::Spec>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,10 +37,10 @@ struct Role {
 }
 #[derive(Default)]
 pub struct AssetCache {
-    models: BTreeMap<PathBuf, Model>,
+    models: BTreeMap<PathBuf, std::sync::Arc<Model>>,
     pub loads: usize,
     bytes: usize,
-    encoded: BTreeMap<PathBuf, Vec<u8>>,
+    encoded: BTreeMap<PathBuf, std::sync::Arc<[u8]>>,
 }
 #[cfg(test)]
 impl AssetCache {
@@ -52,19 +54,25 @@ impl AssetCache {
 pub struct Theme {
     pub name: String,
     pub source: PathBuf,
+    pub(crate) manifest_digest: String,
     pub vertices: Vec<Vertex>,
     pub textures: Vec<std::sync::Arc<crate::assets::Texture>>,
     pub sky: crate::sky::SkyAppearance,
+    pub decorations: crate::decoration::Catalog,
     pub document: [f32; 2],
     pub portal: [f32; 2],
     pub host: HostScene,
     pub diagnostics: Vec<String>,
     pub loaded_roles: Vec<String>,
     pub load_failed: bool,
+    // Valid pack, but unavailable for this exact host. Never retained across hosts.
+    composition_refusal: Option<String>,
     // Only the exact appearance role geometry, not the host desk or status marker.
     document_geometry: BTreeMap<String, std::ops::Range<usize>>,
     // Status is decoration, never part of the replaceable source-model envelope.
     document_status_geometry: BTreeMap<String, std::ops::Range<usize>>,
+    // Exact baked ranges allow a render-only omission by placement identity.
+    decoration_geometry: BTreeMap<String, std::ops::Range<usize>>,
     // Only this suffix is replaceable; constructor/late-installed pack slots survive.
     folder_material_count: usize,
     // Current-document Arc requests survive admission refusal, not page history.
@@ -73,6 +81,13 @@ pub struct Theme {
     folder_previews: BTreeMap<String, (u32, std::sync::Arc<crate::assets::Texture>)>,
     folder_models: BTreeMap<String, std::sync::Arc<Model>>,
     folder_model_materials: BTreeMap<String, Vec<u32>>,
+    // One bounded pack-local shape; no file body, host anchor or texture copies.
+    inventory_document_shape: Vec<Vertex>,
+    item_material_offset: u32,
+    // Immutable pack-only accounting includes cold/warm and unmatched sources.
+    // Pins are charged from each complete candidate, never from the old host.
+    pack_budget: crate::placement_store::pinned::Budget,
+    decoration_base_textures: (usize, usize),
 }
 impl Theme {
     /// Only explicit sky packs/refusals add status; legacy success text stays unchanged.
@@ -149,7 +164,9 @@ impl Theme {
                 })
             })
             .count();
-        let status = if self.load_failed {
+        let status = if self.composition_refusal.is_some() {
+            "UNAVAILABLE"
+        } else if self.load_failed {
             "LOAD FAILED; FALLBACK"
         } else if applied == 0 {
             "NO MATCHING ROLES"
@@ -225,6 +242,14 @@ impl Theme {
                 path.display()
             )
         })?;
+        if data.version != 3 && data.decorations.is_some() {
+            return Err(
+                "decoration catalog requires appearance version 3; original unchanged".into(),
+            );
+        }
+        let mut decoration_spec = data.decorations.unwrap_or_default();
+        decoration_spec.validate()?;
+        decoration_spec.entries.sort_by(|a, b| a.id.cmp(&b.id));
         // Sky resources have a separate finite budget, never world material slots.
         // Colour allocates no image; panorama is decoded once into immutable held pixels.
         let sky = data
@@ -253,7 +278,7 @@ impl Theme {
                 .len()
                 > 3
         {
-            return Err("appearance pack version/name/16 role budget invalid".into());
+            return Err("appearance pack version/name/16 role/3 distinct role model source budget invalid".into());
         }
         let mut roles = BTreeMap::new();
         let mut diagnostics = Vec::new();
@@ -267,11 +292,24 @@ impl Theme {
             crate::sky::SkyAppearance::Legacy => {}
         }
         let mut names = HashSet::new();
-        for r in data.roles {
+        if data.roles.iter().any(|r| r.role.starts_with("$catalog:")) {
+            return Err("reserved catalog role namespace".into());
+        }
+        let catalog_roles = decoration_spec.assets.iter().map(|a| Role {
+            role: format!("$catalog:{}", a.id),
+            file: a.file.clone(),
+            max_extent: a.max_extent,
+            scale: a.scale,
+            yaw_degrees: a.yaw_degrees,
+            pivot: a.pivot,
+        });
+        for r in data.roles.into_iter().chain(catalog_roles) {
             if !names.insert(r.role.clone()) {
                 return Err("duplicate appearance role".into());
             }
-            if !["document", "portal", "decoration", "door-trim"].contains(&r.role.as_str()) {
+            if !r.role.starts_with("$catalog:")
+                && !["document", "portal", "decoration", "door-trim"].contains(&r.role.as_str())
+            {
                 diagnostics.push(format!(
                     "ROLE_FALLBACK unsupported role {:?}; model budgeted but not applied, host unchanged",
                     r.role
@@ -301,16 +339,16 @@ impl Theme {
                 }
                 let key = root.join(&r.file);
                 let bytes = read_local(&root, &r.file, 8_000_000)?;
-                if cache.encoded.get(&key) != Some(&bytes) {
-                    let old = cache.encoded.get(&key).map_or(0, Vec::len);
+                if cache.encoded.get(&key).map(|b| b.as_ref()) != Some(bytes.as_slice()) {
+                    let old = cache.encoded.get(&key).map_or(0, |b| b.len());
                     if cache.bytes - old + bytes.len() > 32_000_000 {
                         return Err("aggregate pack models exceed 32 MB".into());
                     }
                     let model = crate::assets::decode(&bytes, r.max_extent)?;
                     cache.bytes = cache.bytes - old + bytes.len();
                     cache.loads += 1;
-                    cache.encoded.insert(key.clone(), bytes);
-                    cache.models.insert(key.clone(), model);
+                    cache.encoded.insert(key.clone(), bytes.into());
+                    cache.models.insert(key.clone(), std::sync::Arc::new(model));
                 }
                 let m = &cache.models[&key];
                 if (0..3).any(|i| m.max[i] - m.min[i] > r.max_extent) {
@@ -356,21 +394,40 @@ impl Theme {
             .map(|key| cache.models[*key].textures.len())
             .sum();
         let encoded_bytes: usize = keys.iter().map(|key| cache.encoded[*key].len()).sum();
-        if keys.len() > 3
-            || model_vertices > 300_000
-            || texture_bytes + crate::materials::decoded_budget(&data.surfaces) > 32_000_000
-            || texture_count + data.surfaces.iter().filter(|s| s.file.is_some()).count() > 64
-            || encoded_bytes + data.surfaces.iter().filter(|s| s.file.is_some()).count() * 4_000_000
-                > 24_000_000
-            || model_vertices * std::mem::size_of::<Vertex>()
-                + texture_bytes
-                + encoded_bytes
-                + crate::materials::decoded_budget(&data.surfaces)
-                + data.surfaces.iter().filter(|s| s.file.is_some()).count() * 4_000_000
-                > 64_000_000
-        {
-            return Err("aggregate whole-pack budget: <=3 models, 24 MB encoded, 300000 decoded vertices, 32 MB/64 textures, 64 MB retained payload".into());
+        let inventory_bytes = roles
+            .get("document")
+            .map(|(_, key)| cache.models[key].vertices.len())
+            .filter(|n| *n <= 32766)
+            .unwrap_or(0)
+            * std::mem::size_of::<Vertex>();
+        let pack_budget = crate::placement_store::pinned::Budget {
+            theme_models: keys.len(), pin_models: 0, vertices: model_vertices,
+            texture_bytes: texture_bytes + crate::materials::decoded_budget(&data.surfaces),
+            textures: texture_count + data.surfaces.iter().filter(|s| s.file.is_some()).count(),
+            encoded: encoded_bytes + data.surfaces.iter().filter(|s| s.file.is_some()).count() * 4_000_000,
+            extra_retained: inventory_bytes,
+        };
+        // Pack-only and malformed closure authority failures are always fatal.
+        pack_budget.validate()?;
+        for d in host.decorations.values() {
+            d.validate()?;
+            if d.is_pinned() { d.resolve(&crate::decoration::Catalog::default())?; }
         }
+        let decorations = crate::decoration::Catalog {
+            entries: decoration_spec.entries,
+            assets: decoration_spec
+                .assets
+                .into_iter()
+                .map(|spec| {
+                    let key = &roles[&format!("$catalog:{}", spec.id)].1;
+                    crate::decoration::LoadedAsset {
+                        spec,
+                        model: cache.models[key].clone(),
+                        encoded: cache.encoded[key].clone(),
+                    }
+                })
+                .collect(),
+        };
         roles.retain(|role, _| {
             ["document", "portal", "decoration", "door-trim"].contains(&role.as_str())
         });
@@ -411,6 +468,21 @@ impl Theme {
                 .filter(|a| visible(a) && roles.keys().any(|r| matches(r, &a.role)))
                 .count()
         ));
+        let inventory_document_shape: Vec<Vertex> = roles
+            .get("document")
+            .filter(|(_, key)| cache.models[key].vertices.len() <= 32766)
+            .map(|(role, key)| {
+                let rotation = glam::Mat3::from_rotation_y(role.yaw_degrees.to_radians());
+                cache.models[key]
+                    .vertices
+                    .iter()
+                    .map(|v| Vertex {
+                        position: (rotation * glam::Vec3::from_array(v.position)).to_array(),
+                        ..*v
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut vertices = host.vertices();
         let mut document_geometry = BTreeMap::new();
         let mut document_status_geometry = BTreeMap::new();
@@ -430,7 +502,23 @@ impl Theme {
             let local = basis.map(|b| b.canonical_anchor(a));
             let a = local.as_ref().unwrap_or(a);
             let start = vertices.len();
-            if a.role == "portal" && has_trim {
+            if a.role == "document" && host.file_placements.contains_key(&a.id) {
+                // Surface records place only the file item. Keep the empty
+                // role range for preview/material admission and the item marker
+                // below, not detached furniture at the old listing slot.
+                let p = &host.file_placements[&a.id].position;
+                let mut base = p.base_transform(&inventory_document_shape)?;
+                if let Some((_, key)) = roles.get("document") {
+                    let offset = textures.len() as u32;
+                    textures.extend(cache.models[key].textures.iter().cloned());
+                    for v in &mut base {
+                        if v.texture != 0 {
+                            v.texture += offset;
+                        }
+                    }
+                }
+                vertices.extend(base);
+            } else if a.role == "portal" && has_trim {
                 crate::door_trim::frame(&mut vertices, a);
                 if let Some((r, key)) = roles.get("door-trim") {
                     let m = &cache.models[key];
@@ -540,7 +628,108 @@ impl Theme {
                 basis.place(&mut vertices[start..], at);
             }
         }
-        if textures.len() > 64 || textures.iter().map(|t| t.rgba.len()).sum::<usize>() > 32_000_000
+        // Catalog placements own identities and logical envelopes, not role anchors.
+        // An unavailable inactive theme retains the exact colliders but cannot be
+        // activated. The App validates the active theme before installing a folder.
+        let mut decoration_materials = BTreeMap::new();
+        let mut decoration_geometry = BTreeMap::new();
+        let mut decoration_base_textures = (textures.len(), textures.iter().map(|t| t.rgba.len()).sum::<usize>());
+
+        // Reuse the loaded decoration/portal/document role palette (or a declared
+        // wall/floor tint). No model, host anchor or saved transform is edited.
+        let palette = data
+            .surfaces
+            .iter()
+            .find(|s| s.surface == "wall")
+            .or_else(|| data.surfaces.iter().find(|s| s.surface == "floor"))
+            .map(|s| s.tint)
+            .or_else(|| {
+                ["decoration", "portal", "door-trim", "document"]
+                    .iter()
+                    .find_map(|role| {
+                        let (_, key) = roles.get(*role)?;
+                        let model = &cache.models[key];
+                        if model.vertices.is_empty() {
+                            return None;
+                        }
+                        let mut color = [0.0; 3];
+                        for v in &model.vertices {
+                            for (c, value) in color.iter_mut().zip(v.color) {
+                                *c += value / model.vertices.len() as f32;
+                            }
+                        }
+                        Some(color)
+                    })
+            })
+            .unwrap_or([0.40, 0.48, 0.36]);
+        crate::stanchions::append(&mut vertices, host, palette);
+        if vertices.len() > 300_000 {
+            return Err(
+                "appearance scene exceeds 300000 vertices including boundary decoration".into(),
+            );
+        }
+        // Qualify required base geometry/materials independently. Only decoration
+        // composition may become unavailable in folder mode. No retry or reread.
+        let folder_models: &[std::sync::Arc<Model>] = if folder { crate::file_items::Catalog::builtin()?.models() } else { &[] };
+        let folder_texture_count = folder_models.iter().map(|m| m.textures.len()).sum::<usize>();
+        let folder_texture_bytes = folder_models.iter().flat_map(|m| &m.textures).map(|t| t.rgba.len()).sum::<usize>();
+        let base_vertices = vertices.len();
+        let base_textures = textures.len();
+        let base_texture_bytes = textures.iter().map(|t| t.rgba.len()).sum::<usize>();
+        if base_textures + folder_texture_count > 63 || base_texture_bytes + folder_texture_bytes > 32_000_000 {
+            return Err("scene decoded texture budget exceeds 32 MB / 64 images".into());
+        }
+        let composition = (|| -> Result<()> {
+            pack_budget.with_pins(host.decorations.values())?;
+            let mut texture_bytes = base_texture_bytes + folder_texture_bytes;
+            for d in host.decorations.values() {
+                let artwork = d.artwork(&decorations)?;
+                let mut mesh = d.artwork_mesh(&decorations)?;
+                if vertices.len() + mesh.len() > 300_000 {
+                    return Err("appearance scene exceeds 300000 vertices including boundary decoration".into());
+                }
+                if let Some((_, asset)) = artwork {
+                let material_key = d.closure_identity().map(|id| format!("pin:{id}")).unwrap_or_else(|| format!("theme:{}", asset.spec.id));
+                let offset = if let Some(offset) = decoration_materials.get(&material_key) { *offset } else {
+                    texture_bytes += asset.model.textures.iter().map(|t| t.rgba.len()).sum::<usize>();
+                    if textures.len() + asset.model.textures.len() + folder_texture_count > 63 || texture_bytes > 32_000_000 {
+                        return Err("scene decoded texture budget exceeds 32 MB / 64 images".into());
+                    }
+                    let offset = textures.len() as u32;
+                    textures.extend(asset.model.textures.iter().cloned());
+                    decoration_materials.insert(material_key, offset);
+                    offset
+                };
+                for v in &mut mesh { if v.texture != 0 { v.texture += offset; } }
+                } else {
+                    diagnostics.push(format!("Missing artwork | tag={} | id={} | saved Follow-theme record retained", d.tag, d.placement_id));
+                }
+                let start = vertices.len();
+                vertices.extend(mesh);
+                decoration_geometry.insert(d.placement_id.clone(), start..vertices.len());
+            }
+            Ok(())
+        })();
+        let composition_refusal = match composition {
+            Ok(()) => None,
+            Err(e) if folder => {
+                vertices.truncate(base_vertices);
+                textures.truncate(base_textures);
+                decoration_geometry.clear();
+                diagnostics.push(format!("DECORATION_UNAVAILABLE: {e}; appearance cannot be activated; saved records retained"));
+                Some(e)
+            }
+            Err(e) => return Err(e),
+        };
+        let item_material_offset = textures.len() as u32;
+        if folder {
+            for model in folder_models {
+                decoration_base_textures.0 += model.textures.len();
+                decoration_base_textures.1 += model.textures.iter().map(|t| t.rgba.len()).sum::<usize>();
+                textures.extend(model.textures.iter().cloned());
+            }
+        }
+        if textures.len() > 63 || textures.iter().map(|t| t.rgba.len()).sum::<usize>() > 32_000_000
         {
             return Err("scene decoded texture budget exceeds 32 MB / 64 images".into());
         }
@@ -552,23 +741,31 @@ impl Theme {
         Ok(Self {
             name: data.name,
             source: path.to_path_buf(),
+            manifest_digest: crate::placement_store::pinned::digest(&bytes),
             vertices,
             textures,
             sky,
+            decorations,
             document: [d.at[0], d.at[2]],
             portal: [p.at[0], p.at[2]],
             host: host.clone(),
             diagnostics,
             loaded_roles,
             load_failed: false,
+            composition_refusal,
             document_geometry,
             document_status_geometry,
+            decoration_geometry,
             folder_material_count: 0,
             requested_folder_previews: BTreeMap::new(),
             requested_folder_models: BTreeMap::new(),
             folder_previews: BTreeMap::new(),
             folder_models: BTreeMap::new(),
             folder_model_materials: BTreeMap::new(),
+            inventory_document_shape,
+            item_material_offset,
+            pack_budget,
+            decoration_base_textures,
         })
     }
     pub fn blocked(&self, p: [f32; 2]) -> bool {
@@ -578,15 +775,119 @@ impl Theme {
         *pose = Pose {
             position: self.host.spawn,
             ..Pose::default()
-        }
+        };
+        crate::player::fit_camera(&self.host, pose);
     }
     /// Validate before a renderer switches; no mutation/respawn is needed for a reskin.
     pub fn reskin_from(&self, previous: &Self, pose: &Pose) -> Result<()> {
+        self.validate_decorations()?;
         if self.host != previous.host {
             return Err("reskin refused: host scene changed; explicit navigation required".into());
         }
-        if self.blocked(pose.position) {
+        if crate::player::blocked_at(&self.host, pose.position, pose.feet_y) {
             return Err("reskin refused: current pose is outside shared navigation".into());
+        }
+        Ok(())
+    }
+    pub fn validate_decorations(&self) -> Result<()> {
+        if let Some(reason) = &self.composition_refusal { return Err(format!("Theme {} unavailable: {reason}", self.name)); }
+        for d in self.host.decorations.values() {
+            self.decoration_preview(d)?;
+        }
+        Ok(())
+    }
+    /// Current-host availability; missing Follow tags retain their exact semantics.
+    pub fn unavailable_reason(&self) -> Option<String> {
+        self.composition_refusal.clone().or_else(|| self.host.decorations.values()
+            .find_map(|d| d.artwork(&self.decorations).err()))
+    }
+    pub fn validate_layout_decorations(&self, layout: &crate::placement_store::LayoutRead) -> Result<()> {
+        self.validate_decoration_candidate_layout(layout)
+    }
+    pub fn decoration_preview(&self, d: &crate::placement_store::Decoration) -> Result<Vec<Vertex>> {
+        d.artwork_mesh(&self.decorations)
+    }
+    pub fn validate_decoration_layout(
+        &self,
+        layout: &crate::placement_store::LayoutRead,
+        new: &crate::placement_store::Decoration,
+    ) -> Result<()> {
+        let mut candidate = layout.clone();
+        candidate.decorations.push(new.clone());
+        self.validate_decoration_candidate_layout(&candidate)
+    }
+    /// Read-only initial review with the complete acquired proposal. Selection is
+    /// not admission: run complete candidate validation again in EVERY locked
+    /// publisher callback. No source reads or body decode occur here.
+    pub fn validate_pin_layout(
+        &self,
+        layout: &crate::placement_store::LayoutRead,
+        source: &crate::placement_store::CheckedPin,
+        proposed: &crate::placement_store::Decoration,
+    ) -> Result<()> {
+        self.validate_decoration_layout(layout, &source.decoration(proposed)?)
+    }
+    /// Safe appearance entrypoint, not geometry/route authorization. Preflight is
+    /// storage-free even for a fresh folder; the generic core publisher retains
+    /// caller responsibility. The supplied callback must validate fresh routes.
+    pub fn publish_pin_checked(
+        &self,
+        explorer: &crate::local_explorer::Explorer,
+        source: &crate::placement_store::CheckedPin,
+        proposed: &crate::placement_store::Decoration,
+        mut validate_geometry: impl FnMut(&crate::placement_store::LayoutRead) -> Result<()>,
+    ) -> crate::placement_store::Outcome {
+        let preflight = crate::placement_store::read_layout(explorer)
+            .and_then(|layout| self.validate_pin_layout(&layout, source, proposed));
+        if let Err(e) = preflight { return crate::placement_store::Outcome::NotCommitted(e); }
+        crate::placement_store::publish_pin_checked(explorer, source, proposed, |candidate| {
+            self.validate_decoration_candidate_layout(candidate)?;
+            validate_geometry(candidate)
+        })
+    }
+    /// Explicit prepared-decoration resume, not an automatic retry or recovery UI.
+    /// Appearance/combined budgets are checked here at Review and Final under EX.
+    /// Caller MUST freshly validate all-page geometry, doors/routes and visitor
+    /// state at BOTH stages (placement_scene::validate_decoration_candidate).
+    /// No file disposition or cleanup is authorized. Ambiguous must not be retried.
+    pub fn resume_decoration_checked(
+        &self,
+        explorer: &crate::local_explorer::Explorer,
+        selection: &crate::placement_store::PreparedDecorationResume<'_>,
+        cancelled: &std::sync::atomic::AtomicBool,
+        mut validate_geometry: impl FnMut(crate::placement_store::ResumeStage, &crate::placement_store::LayoutRead) -> Result<()>,
+    ) -> crate::placement_store::Outcome {
+        crate::placement_store::resume::resume_decoration_checked(explorer, selection, cancelled, &mut |stage, candidate| {
+            self.validate_decoration_candidate_layout(candidate)?;
+            validate_geometry(stage, candidate)
+        })
+    }
+    /// Complete replacement candidate: charge each saved decoration exactly once.
+    pub fn validate_decoration_candidate_layout(&self, candidate: &crate::placement_store::LayoutRead) -> Result<()> {
+        if let Some(reason) = &self.composition_refusal { return Err(format!("Theme {} unavailable: {reason}", self.name)); }
+        self.pack_budget.with_pins(&candidate.decorations)?;
+        let mut count = self.vertices.len();
+        for range in self.decoration_geometry.values() {
+            count = count.checked_sub(range.len()).ok_or("Decoration scene budget underflow")?;
+        }
+        let mut ids = HashSet::new();
+        let mut materials = HashSet::new();
+        let (mut textures, mut texture_bytes) = self.decoration_base_textures;
+        for d in &candidate.decorations {
+            if !ids.insert(&d.placement_id) { return Err("Duplicate decoration placement identity".into()); }
+            count = count.checked_add(self.decoration_preview(d)?.len()).ok_or("Decoration scene budget overflow")?;
+            let Some((_, asset)) = d.artwork(&self.decorations)? else { continue; };
+            let key = d.closure_identity().map(|id| format!("pin:{id}")).unwrap_or_else(|| format!("theme:{}", asset.spec.id));
+            if materials.insert(key) {
+                textures = textures.checked_add(asset.model.textures.len()).ok_or("Texture count overflow")?;
+                for t in &asset.model.textures {
+                    texture_bytes = texture_bytes.checked_add(t.rgba.len()).ok_or("Texture budget overflow")?;
+                }
+            }
+        }
+        if count > 300_000 { return Err("Decoration scene exceeds 300000 vertices".into()); }
+        if textures > 63 || texture_bytes > 32_000_000 {
+            return Err("scene decoded texture budget exceeds 32 MB / 64 images".into());
         }
         Ok(())
     }
@@ -915,204 +1216,219 @@ impl Theme {
             None
         }
     }
-    // A symmetric content-only inset clears the retained local floor without
-    // moving the host envelope or its center. Too-short envelopes keep fallback.
-    fn image_fit_scale(
-        a: &crate::host_scene::Anchor,
-        image: &crate::assets::Texture,
-    ) -> Option<f32> {
-        if image.width == 0
-            || image.height == 0
-            || !a.size[..2].iter().all(|v| v.is_finite() && *v > 0.0)
-        {
-            return None;
-        }
-        let inset = 0.06_f32.min(a.size[1] * 0.5);
-        let usable_height = a.size[1] - inset * 2.0;
-        if !usable_height.is_finite() || usable_height <= 0.0 {
-            return None;
-        }
-        let scale = (a.size[0] / image.width as f32).min(usable_height / image.height as f32);
-        (scale.is_finite()
-            && scale > 0.0
-            && image.width as f32 * scale > 0.0
-            && image.height as f32 * scale > 0.0)
-            .then_some(scale)
-    }
-    // Successful image decorations require both admission/current suffix and a
-    // drawable inset fit; an unfittable image retains ordinary pack decoration.
-    // Center the metadata above the actual fitted image, in its source plane.
-    // These offsets place decorations only; source fitting remains independent.
+    // Resolve through the same binding and final placement as the pixels, before
+    // and after asynchronous admission, including saved surfaces and animation.
     fn image_placard(
         &self,
         id: &str,
         entry: &crate::local_explorer::Entry,
-    ) -> Option<(&'static str, [f32; 3])> {
-        let kind = self.admitted_image_kind(id, entry)?;
-        let a = self
+        seconds: f64,
+    ) -> Option<(&'static str, [f32; 3], f32)> {
+        use glam::Vec3;
+        if entry.kind != crate::local_explorer::Kind::File
+            || crate::file_items::Class::of(&entry.name) != crate::file_items::Class::Image
+            || self.host.file_placements.get(id).is_some_and(|p| !p.position.properties.label)
+        { return None; }
+        let mesh = self.file_item_shape_at(id, &entry.name, seconds);
+        if mesh.is_empty() { return None; }
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        for v in mesh { let p = Vec3::from_array(v.position); lo = lo.min(p); hi = hi.max(p); }
+        // A 25-column 5x7 caption shares the image's horizontal budget (at
+        // least the ordinary 0.8m file slot), never a separate side column.
+        // Two seven-cell rows plus one-cell row/image gaps occupy 16 cells.
+        // The old full-size 0.20m strip projects behind the 52px HUD on a
+        // square image at ordinary approach in 640x480. Fit the caption, not
+        // the image/camera/HUD. Keep its plane at the actual front bound so
+        // an arbitrary forward offset cannot amplify projection/occlusion.
+        let factor = self.host.file_placements.get(id).map_or(1., |p|p.position.properties.scale_factor());
+        let cell = ((hi.x - lo.x).max(0.8 * factor) / (25. * 6.)).min(0.012 * factor);
+        Some((self.admitted_image_kind(id, entry).unwrap_or(crate::folder_scene::kind(entry)),
+            [(lo.x + hi.x) * 0.5, hi.y + 16. * cell, hi.z], cell))
+    }
+    /// Bounded pack document mesh, independent of current room occupancy.
+    pub fn inventory_document_shape(&self) -> &[Vertex] {
+        &self.inventory_document_shape
+    }
+    /// Theme-role geometry only: no host structure, labels or status placards.
+    pub fn collection_shape(&self, anchor: &str) -> Vec<Vertex> {
+        self.document_geometry
+            .get(anchor)
+            .filter(|range| range.len() <= 32766 && range.len().is_multiple_of(3))
+            .and_then(|range| self.vertices.get(range.clone()))
+            .unwrap_or(&[])
+            .to_vec()
+    }
+    /// Class-item geometry and matching scene texture slots, independent of furniture.
+    pub fn inventory_item_shape(&self, name: &std::ffi::OsStr) -> Vec<Vertex> {
+        let Ok(catalog) = crate::file_items::Catalog::builtin() else {
+            return vec![];
+        };
+        let model = catalog.representation(name);
+        let mut offset = self.item_material_offset;
+        for candidate in catalog.models() {
+            if std::sync::Arc::ptr_eq(candidate, &model) {
+                break;
+            }
+            offset += candidate.textures.len() as u32;
+        }
+        model
+            .vertices
+            .iter()
+            .map(|v| Vertex {
+                texture: if v.texture == 0 {
+                    0
+                } else {
+                    v.texture + offset
+                },
+                ..*v
+            })
+            .collect()
+    }
+    /// The floating item only; the document-role base never moves on collection.
+    pub fn file_item_shape(&self, anchor: &str, name: &std::ffi::OsStr) -> Vec<Vertex> {
+        let Some(a) = self
             .host
             .anchors
             .iter()
-            .find(|a| a.id == id && a.role == "document")?;
-        let (_, image) = self.folder_previews.get(id)?;
-        let scale = Self::image_fit_scale(a, image)?;
-        let top = a.at[1] + (a.size[1] + image.height as f32 * scale) * 0.5;
-        Some((kind, [a.at[0], top + 0.19, a.at[2] + a.size[2] * 0.45]))
+            .find(|a| a.id == anchor && a.role == "document")
+        else {
+            return vec![];
+        };
+        let shape = self.file_item_model(anchor, name);
+        if let Some(placement) = self.host.file_placements.get(anchor) {
+            placement.position.transform(&shape).unwrap_or_default()
+        } else {
+            crate::file_items::above_base(&shape, a)
+        }
+    }
+    /// A disposable render mesh. Surface targeting authority stays static.
+    pub fn file_item_shape_at(
+        &self,
+        anchor: &str,
+        name: &std::ffi::OsStr,
+        seconds: f64,
+    ) -> Vec<Vertex> {
+        if let Some(p) = self.host.file_placements.get(anchor) {
+            return p.position.present_model(&self.file_item_model(anchor, name), seconds).unwrap_or_default();
+        }
+        self.file_item_shape(anchor, name)
+    }
+    pub fn has_file_animation(&self, world: &World) -> bool {
+        if self.host.decorations.values().any(|d|d.animation_mode()!=crate::placement::animation::Mode::None) { return true; }
+        world.folder_view.as_ref().is_some_and(|view| {
+            view.bindings.keys().any(|id| {
+                self.host
+                    .file_placements
+                    .get(id)
+                    .is_some_and(|p| p.position.properties.animated)
+            })
+        })
+    }
+    pub fn assembly_preview(
+        &self,
+        position: &crate::placement_store::Position,
+        model: &[Vertex],
+    ) -> Result<Vec<Vertex>> {
+        self.assembly_preview_at(position, model, 0.)
+    }
+    pub fn assembly_preview_at(
+        &self,
+        position: &crate::placement_store::Position,
+        model: &[Vertex],
+        seconds: f64,
+    ) -> Result<Vec<Vertex>> {
+        let mut mesh = position.present_model(model, seconds)?;
+        mesh.extend(position.base_transform(&self.inventory_document_shape)?);
+        Ok(mesh)
+    }
+    /// Current admitted item in model space, without any saved/base transform.
+    /// Editing must not refit an already rotated world-space mesh.
+    pub fn file_item_model(&self, anchor: &str, name: &std::ffi::OsStr) -> Vec<Vertex> {
+        if crate::file_items::Class::of(name) == crate::file_items::Class::Model
+            && let (Some(model), Some(mapping)) = (
+                self.folder_models.get(anchor),
+                self.folder_model_materials.get(anchor),
+            )
+        {
+            model
+                .vertices
+                .iter()
+                .map(|v| Vertex {
+                    texture: mapping.get(v.texture as usize).copied().unwrap_or(0),
+                    ..*v
+                })
+                .collect()
+        } else if crate::file_items::Class::of(name) == crate::file_items::Class::Image
+            && let Some((material, image)) = self.folder_previews.get(anchor)
+            && let Ok(plane) = crate::file_items::image_plane(image.clone())
+        {
+            plane
+                .vertices
+                .iter()
+                .map(|v| Vertex {
+                    texture: *material,
+                    ..*v
+                })
+                .collect()
+        } else if let Some((material, _)) = self.folder_previews.get(anchor) {
+            // Literal text and admitted video stills occupy the authored paper/
+            // tablet/reel content surface, never vanish behind representative art.
+            self.inventory_item_shape(name)
+                .into_iter()
+                .map(|v| Vertex {
+                    texture: if v.texture == 0 { 0 } else { *material },
+                    ..v
+                })
+                .collect()
+        } else {
+            self.inventory_item_shape(name)
+        }
     }
     pub fn vertices_for(&self, world: &World) -> Vec<Vertex> {
+        self.vertices_for_at(world, 0.)
+    }
+    pub fn vertices_for_at(&self, world: &World, seconds: f64) -> Vec<Vertex> {
+        self.vertices_for_at_omitting_decoration(world, seconds, None)
+    }
+    /// Visual ghost omission only; host colliders and target records stay intact.
+    pub fn vertices_for_at_omitting_decoration(&self, world: &World, seconds: f64, omit: Option<&str>) -> Vec<Vertex> {
+        self.vertices_for_at_omitting(world, seconds, omit, None)
+    }
+    pub fn vertices_for_at_omitting(&self, world: &World, seconds: f64, omit: Option<&str>, file: Option<&str>) -> Vec<Vertex> {
         let mut out = self.vertices.clone();
+        let mut replacements = Vec::new();
+        if let Some(range) = omit.and_then(|id| self.decoration_geometry.get(id)) {
+            replacements.push((range.clone(), vec![]));
+        }
+        for (id,d) in &self.host.decorations {
+            if omit == Some(id.as_str()) || d.animation_mode()==crate::placement::animation::Mode::None { continue; }
+            if let Some(range)=self.decoration_geometry.get(id) {
+                // Retain the already admitted scene material namespace exactly.
+                let mut mesh=self.vertices[range.clone()].to_vec();
+                let art_len=d.artwork(&self.decorations).ok().flatten().map_or(36,|(_,a)|a.model.vertices.len());
+                if d.present_artwork(&mut mesh,art_len,seconds).is_ok() { replacements.push((range.clone(),mesh)); }
+            }
+        }
         if let Some(view) = &world.folder_view {
-            // Move only admitted local-model status decoration, before any source
-            // splices change offsets. The stored base scene and other media stay
-            // unchanged. Key this to the admitted payload, like its presentation,
-            // not to the displayed basename or transient interaction selection.
-            for id in self.folder_models.keys() {
-                if let Some(a) = self.host.anchors.iter().find(|a| &a.id == id)
-                    && let Some(range) = self.document_status_geometry.get(id)
-                {
-                    let z = a.at[2] - a.size[2] * 0.5 - 0.35;
-                    for v in &mut out[range.clone()] {
-                        v.position[0] = a.at[0] + (v.position[0] - a.at[0]) * 0.5;
-                        v.position[1] -= 0.18;
-                        v.position[2] = z + (v.position[2] - a.at[2]) * 0.3;
-                    }
-                }
-            }
-            // Successful MP4 stills use their own placard column. Move only
-            // recorded status vertices before source splices alter the offsets;
-            // do not move the image, pack fallback, host or model decoration.
-            for (id, bound) in &view.bindings {
-                if self.has_video_still(id, &bound.entry)
-                    && let Some(a) = self
-                        .host
-                        .anchors
-                        .iter()
-                        .find(|a| &a.id == id && a.role == "document")
-                    && let Some(range) = self.document_status_geometry.get(id)
-                {
-                    let z = a.at[2] - a.size[2] * 0.5 - 0.35;
-                    for v in &mut out[range.clone()] {
-                        v.position[0] = a.at[0] + 0.65 + (v.position[0] - a.at[0]) * 0.5;
-                        v.position[1] -= 0.59;
-                        v.position[2] = z + (v.position[2] - a.at[2]) * 0.3;
-                    }
-                }
-            }
-            // Only admitted current images move their recorded 36-vertex status
-            // cuboid into the compact group above the fitted source. Keep its
-            // topology/order and leave pending/refused/fallback markers unchanged.
-            for (id, bound) in &view.bindings {
-                if let Some((_, at)) = self.image_placard(id, &bound.entry)
-                    && let Some(a) = self
-                        .host
-                        .anchors
-                        .iter()
-                        .find(|a| &a.id == id && a.role == "document")
-                    && let Some(range) = self.document_status_geometry.get(id)
-                {
-                    let original_y = a.at[1] + a.size[1] + 0.03;
-                    for v in &mut out[range.clone()] {
-                        v.position[0] = at[0] + 0.5 + (v.position[0] - a.at[0]) * 0.5;
-                        v.position[1] = at[1] - 0.13 + (v.position[1] - original_y);
-                        v.position[2] = at[2] + (v.position[2] - a.at[2]) * 0.1;
-                    }
-                }
-            }
-            let mut replacements = Vec::new();
-            for (id, (material, image)) in &self.folder_previews {
-                let Some(bound) = view.bindings.get(id) else {
-                    continue;
-                };
-                let Some(a) = self
-                    .host
-                    .anchors
-                    .iter()
-                    .find(|a| &a.id == id && a.role == "document")
-                else {
-                    continue;
-                };
-                let Some(range) = self.document_geometry.get(id) else {
-                    continue;
-                };
-                // Inset only admitted current regular PNG/JPEG content. Other
-                // texture previews retain the exact full-envelope fit arithmetic.
-                let scale = if self.admitted_image_kind(id, &bound.entry).is_some() {
-                    let Some(scale) = Self::image_fit_scale(a, image) else {
-                        continue; // honest pack shape and ordinary decorations
-                    };
-                    scale
-                } else {
-                    (a.size[0] / image.width as f32).min(a.size[1] / image.height as f32)
-                };
-                // Same X/Y center, plane depth, source UVs and material as before.
-                let [w, h] = [image.width as f32 * scale, image.height as f32 * scale];
-                let left = a.at[0] - w * 0.5;
-                let top = a.at[1] + (a.size[1] + h) * 0.5;
-                let z = a.at[2] + a.size[2] * 0.45;
-                let v = |x, y, uv| Vertex {
-                    position: [x, y, z],
-                    color: [1.0; 3],
-                    uv,
-                    texture: *material,
-                };
-                let tl = v(left, top, [0.0, 0.0]);
-                let tr = v(left + w, top, [1.0, 0.0]);
-                let br = v(left + w, top - h, [1.0, 1.0]);
-                let bl = v(left, top - h, [0.0, 1.0]);
-                replacements.push((range.clone(), vec![tl, tr, br, tl, br, bl]));
-            }
-            for (id, model) in &self.folder_models {
-                if !view.bindings.contains_key(id) {
-                    continue;
-                }
-                let Some(a) = self
-                    .host
-                    .anchors
-                    .iter()
-                    .find(|a| &a.id == id && a.role == "document")
-                else {
-                    continue;
-                };
-                let Some(range) = self.document_geometry.get(id) else {
-                    continue;
-                };
-                let Some(materials) = self.folder_model_materials.get(id) else {
-                    continue; // only a jointly admitted complete mapping can draw
-                };
-                let extent: [f32; 3] = std::array::from_fn(|i| model.max[i] - model.min[i]);
-                let scale = (0..3)
-                    .filter(|i| extent[*i] > 0.0)
-                    .map(|i| a.size[i] / extent[i])
-                    .fold(f32::INFINITY, f32::min);
-                if !scale.is_finite() || scale <= 0.0 {
-                    continue; // fully degenerate geometry keeps pack fallback
-                }
-                let center = [a.at[0], a.at[1] + a.size[1] * 0.5, a.at[2]];
-                let vertices = model
-                    .vertices
-                    .iter()
-                    .map(|v| Vertex {
-                        position: std::array::from_fn(|i| {
-                            center[i]
-                                + (v.position[i] - (model.min[i] + model.max[i]) * 0.5) * scale
-                        }),
-                        texture: usize::try_from(v.texture)
-                            .ok()
-                            .and_then(|index| materials.get(index))
-                            .copied()
-                            .unwrap_or(0),
-                        ..*v // preserve decoder lit colors and source UVs exactly
+            // Replace only item markers. Stationary furniture and all host solids
+            // remain byte-for-byte unchanged; one path supplies collection too.
+            replacements.extend(view
+                .bindings
+                .iter()
+                .filter_map(|(id, bound)| {
+                    self.document_status_geometry.get(id).map(|range| {
+                        (
+                            range.clone(),
+                            if file == Some(id.as_str()) { vec![] } else { self.file_item_shape_at(id, &bound.entry.name, seconds) },
+                        )
                     })
-                    .collect::<Vec<_>>();
-                replacements.push((range.clone(), vertices));
-            }
-            // Reverse offsets preserve every vertex outside the replaced source
-            // ranges. Only admitted model/video/image status decorations above move;
-            // desks, other media/host markers and selection remain unchanged.
-            replacements.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
-            for (range, vertices) in replacements {
-                out.splice(range, vertices);
-            }
+                })
+                .collect::<Vec<_>>());
+        }
+        replacements.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+        for (range, vertices) in replacements {
+            out.splice(range, vertices);
         }
         if let Some(view) = &world.folder_view {
             if let Some(id) = &view.parent
@@ -1128,8 +1444,34 @@ impl Theme {
                 }
             }
             for (id, bound) in &view.bindings {
+                if file == Some(id.as_str()) { continue; }
                 if let Some(a) = self.host.anchors.iter().find(|a| &a.id == id) {
                     let name = crate::folder_scene::display(&bound.entry.name);
+                    if a.role == "document"
+                        && let Some((kind, at, cell)) = self.image_placard(id, &bound.entry, seconds)
+                    {
+                        for (text, y) in [(name.as_str(), at[1]), (kind, at[1] - 8. * cell)] {
+                            let mut label = crate::text::object_label(text, [0.; 3], 25);
+                            for v in &mut label {
+                                v.position = [at[0] + v.position[0] * cell / 0.012,
+                                    y + v.position[1] * cell / 0.012, at[2]];
+                            }
+                            out.extend(label);
+                        }
+                        continue;
+                    }
+                    if let Some(p) = self.host.file_placements.get(id) {
+                        if !p.position.properties.label {
+                            continue;
+                        }
+                        let factor = p.position.properties.scale_factor();
+                        let at = [p.bounds.at[0], p.bounds.at[1] + p.bounds.size[1] + 0.12 * factor + p.position.properties.file_offset(seconds),
+                            p.bounds.at[2] + p.bounds.size[2] * 0.5 + 0.02 * factor];
+                        let mut label = crate::text::object_label(&name, [0.;3], 25);
+                        for v in &mut label { v.position = std::array::from_fn(|i| at[i] + v.position[i]*factor); }
+                        out.extend(label);
+                        continue;
+                    }
                     if self.folder_models.contains_key(id) {
                         // Move the admitted-model labels beside the silhouette,
                         // below the opaque top HUD and right of the tree on the
@@ -1160,19 +1502,6 @@ impl Theme {
                         out.extend(crate::text::object_label(
                             "MP4 still",
                             [at[0], at[1] - 0.14, at[2]],
-                            25,
-                        ));
-                    } else if a.role == "document"
-                        && let Some((kind, at)) = self.image_placard(id, &bound.entry)
-                    {
-                        // One source-plane group above the actual image, with
-                        // unchanged literal glyph size/budget and public I metadata.
-                        // Seven 0.012m rows leave the kind's bottom above the source;
-                        // the compact status sits to its right, not at the crosshair.
-                        out.extend(crate::text::object_label(&name, at, 25));
-                        out.extend(crate::text::object_label(
-                            kind,
-                            [at[0], at[1] - 0.10, at[2]],
                             25,
                         ));
                     } else {
@@ -1233,30 +1562,43 @@ impl Theme {
             && world.explicit_target.as_ref() == Some(target)
             && let Some(a) = self.host.anchors.iter().find(|a| a.id == target.anchor)
         {
-            let basis = (a.role == "portal").then(|| self.host.portal_basis(&a.id));
-            let at = a.at;
-            let local = basis.map(|b| b.canonical_anchor(a));
-            let a = local.as_ref().unwrap_or(a);
-            let start = out.len();
-            let (y, z, h) = if a.role == "document" {
-                (a.at[1] + a.size[1] + 0.045, a.at[2], 0.03)
+            if let Some(bound) = world
+                .folder_view
+                .as_ref()
+                .and_then(|view| view.bindings.get(&target.anchor))
+                .filter(|bound| bound.entry.kind == crate::local_explorer::Kind::File)
+            {
+                // Consume exactly the rendered item after preview admission and
+                // its saved floor/side/underside transform, never the base or
+                // the resolver's deliberately broader interaction envelope.
+                let item = self.file_item_shape_at(&target.anchor, &bound.entry.name, seconds);
+                Self::file_outline(&mut out, &item);
             } else {
-                (
-                    a.at[1] + a.size[1] * 0.5,
-                    a.at[2] + a.size[2] * 0.5 + 0.04,
-                    0.29,
-                )
-            };
-            for x in [-0.25, 0.25] {
-                crate::scene::cuboid(
-                    &mut out,
-                    [a.at[0] + x, y, z],
-                    [0.025, h, 0.24],
-                    [0.55, 0.95, 0.65],
-                );
-            }
-            if let Some(basis) = basis {
-                basis.place(&mut out[start..], at);
+                let basis = (a.role == "portal").then(|| self.host.portal_basis(&a.id));
+                let at = a.at;
+                let local = basis.map(|b| b.canonical_anchor(a));
+                let a = local.as_ref().unwrap_or(a);
+                let start = out.len();
+                let (y, z, h) = if a.role == "document" {
+                    (a.at[1] + a.size[1] + 0.045, a.at[2], 0.03)
+                } else {
+                    (
+                        a.at[1] + a.size[1] * 0.5,
+                        a.at[2] + a.size[2] * 0.5 + 0.04,
+                        0.29,
+                    )
+                };
+                for x in [-0.25, 0.25] {
+                    crate::scene::cuboid(
+                        &mut out,
+                        [a.at[0] + x, y, z],
+                        [0.025, h, 0.24],
+                        [0.55, 0.95, 0.65],
+                    );
+                }
+                if let Some(basis) = basis {
+                    basis.place(&mut out[start..], at);
+                }
             }
         }
         if let Some(site) = &world.site {
@@ -1274,6 +1616,42 @@ impl Theme {
             }
         }
         out
+    }
+    /// Twelve thin edges around the rendered mesh's world-space bounds. This
+    /// is bounds chrome, not a silhouette pass or an interaction/collision solid.
+    fn file_outline(out: &mut Vec<Vertex>, item: &[Vertex]) {
+        if item.is_empty()
+            || item
+                .iter()
+                .any(|v| !v.position.into_iter().all(f32::is_finite))
+        {
+            return;
+        }
+        let mut low = glam::Vec3::splat(f32::INFINITY);
+        let mut high = glam::Vec3::splat(f32::NEG_INFINITY);
+        for v in item {
+            let p = glam::Vec3::from_array(v.position);
+            low = low.min(p);
+            high = high.max(p);
+        }
+        // Keep even a zero-thickness image visible from either side. All bars
+        // use the normal depth-tested scene pass: no wall-penetrating overlay.
+        let low = low.to_array();
+        let high = high.to_array();
+        for axis in 0..3 {
+            let b = (axis + 1) % 3;
+            let c = (axis + 2) % 3;
+            for side_b in [false, true] {
+                for side_c in [false, true] {
+                    let mut at = std::array::from_fn(|i| (low[i] + high[i]) * 0.5);
+                    at[b] = if side_b { high[b] } else { low[b] };
+                    at[c] = if side_c { high[c] } else { low[c] };
+                    let mut size = [0.03; 3];
+                    size[axis] = high[axis] - low[axis] + 0.03;
+                    crate::scene::cuboid(out, at, size, [0.55, 0.95, 0.65]);
+                }
+            }
+        }
     }
     fn image(&self, out: &mut Vec<Vertex>, image: &crate::content::Image) {
         let a = self.host.anchor("image");

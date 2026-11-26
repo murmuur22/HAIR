@@ -61,7 +61,7 @@ pub fn snapshot(selected: &Path) -> Result<Snapshot> {
     backend::snapshot(selected)
 }
 
-pub use backend::{Explorer, ReaderFile};
+pub use backend::{Destination, Explorer, ReaderFile};
 
 /// Independent random-access budget; the whole-body API and its ceiling are unchanged.
 pub const READER_CHUNK_BYTES: usize = 4096;
@@ -103,10 +103,12 @@ mod backend {
     /// One current snapshot and handle; history owns handles, never cached snapshots.
     /// Parent is explicitly allowed outside the initial folder. This is not a jail.
     /// Back reloads visited contents and consumes a history item only on success.
+    #[derive(Clone)]
+    pub struct Destination(std::sync::Arc<Directory>);
     pub struct Explorer {
-        directory: Directory,
+        directory: std::sync::Arc<Directory>,
         current: Snapshot,
-        history: VecDeque<Directory>,
+        history: VecDeque<std::sync::Arc<Directory>>,
     }
 
     // atime is intentionally excluded: our own reads can change it. This is
@@ -137,6 +139,8 @@ mod backend {
     pub struct ReaderFile {
         file: File,
         baseline: Stamp,
+        #[cfg(test)]
+        chunk_read_limit: Option<(u64, usize)>,
     }
     impl ReaderFile {
         /// Explicit image-only staging of the SAME authorized open description.
@@ -148,6 +152,8 @@ mod backend {
                     .try_clone()
                     .map_err(|e| format!("stage image handle: {e}"))?,
                 baseline: self.baseline,
+                #[cfg(test)]
+                chunk_read_limit: self.chunk_read_limit,
             })
         }
         /// Worker-only bounded immutable image acquisition. Raw4096 and read_entry
@@ -225,6 +231,13 @@ mod backend {
             self.baseline = reader_stamp(&self.file)?;
             self.read_chunk(0)
         }
+        /// Test-only syscall sizing, not returned-data/error injection: every byte
+        /// still comes from read_at on this authorized held file and original stamp.
+        #[cfg(test)]
+        pub(crate) fn limit_chunk_reads_from(&mut self, offset: u64, bytes: usize) {
+            assert!(bytes > 0);
+            self.chunk_read_limit = Some((offset, bytes));
+        }
         pub fn read_chunk(&self, offset: u64) -> Result<ReaderChunk> {
             use std::os::unix::fs::FileExt;
             let end_limit = offset
@@ -260,7 +273,14 @@ mod backend {
                 let at = offset
                     .checked_add(chunk.used as u64)
                     .ok_or("reader offset overflow")?;
-                match self.file.read_at(&mut chunk.bytes[chunk.used..wanted], at) {
+                #[cfg(not(test))]
+                let read_end = wanted;
+                #[cfg(test)]
+                let read_end = match self.chunk_read_limit {
+                    Some((from, cap)) if offset >= from => wanted.min(chunk.used.saturating_add(cap)),
+                    _ => wanted,
+                };
+                match self.file.read_at(&mut chunk.bytes[chunk.used..read_end], at) {
                     Ok(0) => break,
                     Ok(n) => chunk.used += n,
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -285,6 +305,13 @@ mod backend {
     }
 
     impl Explorer {
+        #[cfg(target_os = "macos")]
+        pub(crate) fn placement_directory(&self) -> Result<File> {
+            self.directory
+                .0
+                .try_clone()
+                .map_err(|e| format!("retain placement directory: {e}"))
+        }
         /// Open exactly once, relative to the held directory and original component.
         /// A raced special object may be opened transiently; it is never body-read.
         pub fn open_reader(&self, index: usize) -> Result<ReaderFile> {
@@ -315,14 +342,18 @@ mod backend {
             // SAFETY: newly acquired descriptor, immediately given one owner.
             let file = unsafe { File::from_raw_fd(fd) };
             let baseline = reader_stamp(&file)?;
-            Ok(ReaderFile { file, baseline })
+            Ok(ReaderFile {
+                file, baseline,
+                #[cfg(test)]
+                chunk_read_limit: None,
+            })
         }
         pub fn new(path: &Path) -> Result<Self> {
             let result = (|| {
                 let directory = Directory::initial(path)?;
                 let current = load(&directory)?;
                 Ok(Self {
-                    directory,
+                    directory: std::sync::Arc::new(directory),
                     current,
                     history: VecDeque::with_capacity(MAX_HISTORY),
                 })
@@ -335,26 +366,98 @@ mod backend {
             })
         }
 
-        /// Transaction staging duplicates at most 65 directory descriptors and one
-        /// bounded snapshot. Enumeration opens a fresh '.' description, never seeks
-        /// these duplicated descriptors; no shared mutable stream offsets are used.
+        /// Share immutable directory authority. Enumeration always opens a fresh
+        /// '.' description, so neither clones nor bookmarks share stream offsets.
         pub fn try_clone(&self) -> Result<Self> {
-            let duplicate = |d: &Directory| {
-                d.0.try_clone()
-                    .map(Directory)
-                    .map_err(|e| format!("stage directory handle: {e}"))
-            };
             Ok(Self {
-                directory: duplicate(&self.directory)?,
+                directory: self.directory.clone(),
                 current: self.current.clone(),
-                history: self.history.iter().map(duplicate).collect::<Result<_>>()?,
+                history: self.history.clone(),
             })
+        }
+        pub fn destination(&self) -> Destination {
+            Destination(self.directory.clone())
+        }
+        pub fn jump(&mut self, destination: &Destination) -> Result<()> {
+            let current = load(&destination.0).map_err(|e| retained("Map travel", e))?;
+            self.commit(destination.0.clone(), current);
+            Ok(())
+        }
+        /// Rebuild the bounded Back stack from retained route authorities, never paths.
+        pub fn restore_route(&mut self, route: &[Destination]) -> Result<()> {
+            if route.is_empty() || route.len() > MAX_HISTORY {
+                return Err("Invalid retained route length".into());
+            }
+            let target = route.last().unwrap();
+            let current = load(&target.0).map_err(|e| retained("Route return", e))?;
+            self.directory = target.0.clone();
+            self.current = current;
+            self.history = route[..route.len() - 1]
+                .iter()
+                .map(|d| d.0.clone())
+                .collect();
+            Ok(())
         }
 
         pub fn current(&self) -> &Snapshot {
             &self.current
         }
 
+        pub fn map_identity(&self) -> Result<[u64; 2]> {
+            let m = self.directory.metadata()?;
+            Ok([m.dev(), m.ino()])
+        }
+        /// Compare acquired directories, never a display path or symlink target.
+        /// Ascend only no-follow '..' handles; a bounded/failed walk refuses.
+        pub fn is_within_directory(&self, ancestor: &File) -> Result<bool> {
+            directory_is_within(&self.directory.0, ancestor)
+        }
+        pub fn contains_directory(&self, child: &File) -> Result<bool> {
+            directory_is_within(child, &self.directory.0)
+        }
+        pub fn is_within_explorer(&self, ancestor: &Self) -> Result<bool> {
+            self.is_within_directory(&ancestor.directory.0)
+        }
+        /// Refuse any acquired candidate inside room-owned layout metadata,
+        /// including aliases and late reparenting. Never initialize to inspect.
+        pub fn check_cache_directory(candidate: &File) -> Result<()> {
+            let mut current = Directory(candidate.try_clone().map_err(|e| e.to_string())?);
+            for _ in 0..1024 {
+                let here = current.metadata()?;
+                let parent = current.open_at(c"..")?;
+                let above = parent.metadata()?;
+                let mut layout = MaybeUninit::<libc::stat>::uninit();
+                // SAFETY: held parent, constant component, writable stat storage.
+                let found = unsafe { libc::fstatat(parent.0.as_raw_fd(), c".hair-layout".as_ptr(), layout.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
+                if found == 0 {
+                    // SAFETY: successful fstatat initialized the entire stat.
+                    let layout = unsafe { layout.assume_init() };
+                    if (here.dev(), here.ino()) == (layout.st_dev as u64, layout.st_ino) {
+                        return Err("Cache cannot initialize room-owned .hair-layout or its descendants".into());
+                    }
+                } else {
+                    let error = io::Error::last_os_error();
+                    if error.kind() != io::ErrorKind::NotFound { return Err(format!("Cache layout-boundary inspection: {error}")); }
+                }
+                if (here.dev(), here.ino()) == (above.dev(), above.ino()) { return Ok(()); }
+                current = parent;
+            }
+            Err("Cache layout ancestor inspection budget exceeded; nothing initialized".into())
+        }
+        pub fn has_visited_directory(&self, candidate: &File) -> Result<bool> {
+            let target = candidate.metadata().map_err(|e| e.to_string())?;
+            for directory in std::iter::once(&self.directory).chain(self.history.iter()) {
+                let m = directory.metadata()?;
+                if (m.dev(), m.ino()) == (target.dev(), target.ino()) { return Ok(true); }
+            }
+            Ok(false)
+        }
+        pub fn map_back_identity(&self) -> Result<Option<[u64; 2]>> {
+            self.history
+                .back()
+                .map(|d| d.metadata().map(|m| [m.dev(), m.ino()]))
+                .transpose()
+        }
         /// Compare live, pinned directory handles without reopening display paths.
         /// The index refers to the existing bounded Back deque, oldest first.
         /// Observing a match neither consumes history nor changes either explorer.
@@ -453,7 +556,7 @@ mod backend {
                 Ok((directory, current))
             })();
             let (directory, current) = result.map_err(|error| retained("Enter", error))?;
-            self.commit(directory, current);
+            self.commit(std::sync::Arc::new(directory), current);
             Ok(())
         }
 
@@ -473,7 +576,7 @@ mod backend {
             match result.map_err(|error| retained("Parent", error))? {
                 None => Ok(false),
                 Some((directory, current)) => {
-                    self.commit(directory, current);
+                    self.commit(std::sync::Arc::new(directory), current);
                     Ok(true)
                 }
             }
@@ -501,7 +604,7 @@ mod backend {
             Ok(())
         }
 
-        fn commit(&mut self, directory: Directory, current: Snapshot) {
+        fn commit(&mut self, directory: std::sync::Arc<Directory>, current: Snapshot) {
             let previous = std::mem::replace(&mut self.directory, directory);
             self.current = current;
             if self.history.len() == MAX_HISTORY {
@@ -528,6 +631,22 @@ mod backend {
         }
         CString::new(bytes)
             .map_err(|_| format!("child component {} contains NUL", escape_display(name)))
+    }
+
+    fn directory_is_within(child: &File, ancestor: &File) -> Result<bool> {
+        let target = ancestor.metadata().map_err(|e| e.to_string())?;
+        if !target.is_dir() { return Err("Ancestor authority is not a directory".into()); }
+        let mut current = Directory(child.try_clone().map_err(|e| e.to_string())?);
+        for _ in 0..1024 {
+            let here = current.metadata()?;
+            if !here.is_dir() { return Err("Child authority is not a directory".into()); }
+            if (here.dev(), here.ino()) == (target.dev(), target.ino()) { return Ok(true); }
+            let parent = current.open_at(c"..")?;
+            let above = parent.metadata()?;
+            if (here.dev(), here.ino()) == (above.dev(), above.ino()) { return Ok(false); }
+            current = parent;
+        }
+        Err("Directory ancestor inspection budget exceeded; no placement/adoption".into())
     }
 
     struct Directory(File);
@@ -803,6 +922,8 @@ mod backend {
     pub struct Explorer {
         current: Snapshot,
     }
+    #[derive(Clone)]
+    pub struct Destination;
     pub struct ReaderFile;
     impl ReaderFile {
         pub fn try_clone(&self) -> Result<Self> {
@@ -840,10 +961,25 @@ mod backend {
         pub fn new(_path: &Path) -> Result<Self> {
             Err(UNSUPPORTED.into())
         }
+        pub fn destination(&self) -> Destination {
+            Destination
+        }
+        pub fn jump(&mut self, _destination: &Destination) -> Result<()> {
+            Err(UNSUPPORTED.into())
+        }
+        pub fn restore_route(&mut self, _route: &[Destination]) -> Result<()> {
+            Err(UNSUPPORTED.into())
+        }
         pub fn current(&self) -> &Snapshot {
             &self.current
         }
         pub fn try_clone(&self) -> Result<Self> {
+            Err(UNSUPPORTED.into())
+        }
+        pub fn map_identity(&self) -> Result<[u64; 2]> {
+            Err(UNSUPPORTED.into())
+        }
+        pub fn map_back_identity(&self) -> Result<Option<[u64; 2]>> {
             Err(UNSUPPORTED.into())
         }
         pub fn history_matches_current(&self, _index: usize, _other: &Self) -> Result<bool> {

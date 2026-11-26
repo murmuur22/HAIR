@@ -297,6 +297,8 @@ fn whole_pack_surfaces_ui_roundtrip_and_greenleaf_pixels_preserve_host_state() {
                 hair::theme::Theme::load_for_scene(&pack, &mut Default::default(), &s.scene)
                     .unwrap();
             let pose = hair::Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: s.scene.spawn,
                 // Old yaw0 faces the nearby outward portal; exact uncertified readback
                 // and source diagnosis retained under hair-materials-r2/POSE-DIAGNOSIS.json.

@@ -2,6 +2,9 @@
 //! That tracer injects no decoder result, cache, material, mesh or framebuffer.
 //! The separate Theme-controlled test below covers decoration predicates only.
 //! Still only: preserve E's raw default; no playback/audio/device/GPU claim.
+//! Qualification on macOS requires the genuine SHA-pinned absolute
+//! HAIR_VIDEO_STILL_FIXTURE after sourcing the test environment. These original
+//! authentic tests are nonignored: missing/wrong fixture fails setup, never skips.
 use super::*;
 use hair::assets::{Texture, Vertex};
 use sha2::{Digest, Sha256};
@@ -96,7 +99,7 @@ fn decorations(
             a.at[2] + a.size[2] * 0.5 + 0.02,
         ]
     };
-    let mut out = status(a, success);
+    let mut out = Vec::new();
     out.extend(hair::text::object_label(display, at, 25));
     out.extend(hair::text::object_label(
         if success { "MP4 still" } else { kind },
@@ -105,31 +108,40 @@ fn decorations(
     ));
     out
 }
+// Independent R1 image-caption contract from declared input geometry, never
+// extracted candidate label vertices. MP4 decorations()/status() stay unchanged.
+fn image_caption(display: &str, kind: &str, declared_shape: &[Vertex]) -> Vec<Vertex> {
+    assert!(!declared_shape.is_empty());
+    let mut lo = [f32::INFINITY; 3];
+    let mut hi = [f32::NEG_INFINITY; 3];
+    for v in declared_shape {
+        for i in 0..3 {
+            lo[i] = lo[i].min(v.position[i]);
+            hi[i] = hi[i].max(v.position[i]);
+        }
+    }
+    let cell = ((hi[0] - lo[0]).max(0.8) / (25. * 6.)).min(0.012);
+    let center = (lo[0] + hi[0]) * 0.5;
+    let top = hi[1] + 16. * cell;
+    let mut out = Vec::new();
+    for (text, y) in [(display, top), (kind, top - 8. * cell)] {
+        let mut row = hair::text::object_label(text, [0.; 3], 25);
+        for v in &mut row {
+            v.position = [center + v.position[0] * cell / 0.012,
+                y + v.position[1] * cell / 0.012, hi[2]];
+        }
+        out.extend(row);
+    }
+    out
+}
 fn image_decorations(
     a: &hair::host_scene::Anchor,
     display: &str,
     concise: &str,
     image: &Texture,
 ) -> Vec<Vertex> {
-    // Image-only source-plane group. Keep MP4's independent status contract.
-    let usable = a.size[1] - 0.06_f32.min(a.size[1] * 0.5) * 2.0;
-    let scale = (a.size[0] / image.width as f32).min(usable / image.height as f32);
-    let top = a.at[1] + (a.size[1] + image.height as f32 * scale) * 0.5;
-    let at = [a.at[0], top + 0.19, a.at[2] + a.size[2] * 0.45];
-    let original_y = a.at[1] + a.size[1] + 0.03;
-    let mut out = status(a, false);
-    for v in &mut out {
-        v.position[0] = at[0] + 0.5 + (v.position[0] - a.at[0]) * 0.5;
-        v.position[1] = at[1] - 0.13 + (v.position[1] - original_y);
-        v.position[2] = at[2] + (v.position[2] - a.at[2]) * 0.1;
-    }
-    out.extend(hair::text::object_label(display, at, 25));
-    out.extend(hair::text::object_label(
-        concise,
-        [at[0], at[1] - 0.10, at[2]],
-        25,
-    ));
-    out
+    assert!(image.width > 0 && image.height > 0);
+    image_caption(display, concise, &declared_plane(a, image, 0, true))
 }
 fn image_preservation(
     scene: &[Vertex],
@@ -139,16 +151,30 @@ fn image_preservation(
     image: &Texture,
     material: u32,
 ) {
-    let old = decorations(
-        a,
+    let old = image_caption(
         "\"Replacement.png\"",
         "PNG suffix (lazy bounded preview or fallback; E checks source)",
-        false,
+        body,
     );
     let new = image_decorations(a, "\"Replacement.png\"", "PNG image", image);
+    // The detached rear-right column must NOT pass as the new image caption.
+    let detached = hair::text::object_label(
+        "\"Replacement.png\"",
+        [a.at[0] + 1.75, a.at[1] + a.size[1] + 0.4, a.at[2] - 1.9],
+        25,
+    );
+    assert!(detached.iter().any(|v| !scene.iter().any(|actual|
+        bytemuck::bytes_of(actual) == bytemuck::bytes_of(v))),
+        "VIDEO_REUSED_PNG_MUST_NOT_KEEP_DETACHED_CAPTION");
     let actual = subtract(scene, &new);
     let original = subtract(baseline, &old);
-    assert_eq!(outside(&actual, a), outside(&original, a));
+    assert_eq!(
+        outside(
+            &subtract(&actual, &declared_plane(a, image, material, true)),
+            a
+        ),
+        outside(&subtract(&original, body), a)
+    );
     assert_eq!(
         bytemuck::cast_slice::<Vertex, u8>(&subtract(
             &actual,
@@ -164,16 +190,29 @@ fn declared_plane(
     material: u32,
     image_fit: bool,
 ) -> Vec<Vertex> {
-    let scale = if image_fit {
-        let usable_height = a.size[1] - 0.06_f32.min(a.size[1] * 0.5) * 2.0;
-        (a.size[0] / image.width as f32).min(usable_height / image.height as f32)
-    } else {
-        (a.size[0] / image.width as f32).min(a.size[1] / image.height as f32)
-    };
+    if !image_fit {
+        let model = hair::file_items::Catalog::builtin()
+            .unwrap()
+            .representation(std::ffi::OsStr::new(NAME));
+        let raw = model
+            .vertices
+            .iter()
+            .map(|v| Vertex {
+                texture: if v.texture == 0 {
+                    0
+                } else {
+                    material | 0x8000_0000
+                },
+                ..*v
+            })
+            .collect::<Vec<_>>();
+        return super::local_model_preview_tests::reference_floating(&raw, a);
+    }
+    let scale = (0.8 / image.width as f32).min(0.85 / image.height as f32);
     let [w, h] = [image.width as f32 * scale, image.height as f32 * scale];
     let left = a.at[0] - w * 0.5;
-    let top = a.at[1] + (a.size[1] + h) * 0.5;
-    let z = a.at[2] + a.size[2] * 0.45;
+    let top = a.at[1] + a.size[1] + 0.12 + h;
+    let z = a.at[2];
     [
         (left, top, [0.0, 0.0]),
         (left + w, top, [1.0, 0.0]),
@@ -190,7 +229,7 @@ fn declared_plane(
     })
     .to_vec()
 }
-fn fallback_body(root: &Path, theme: &hair::theme::Theme, id: &str) -> Vec<Vertex> {
+fn fallback_body(root: &Path, theme: &hair::theme::Theme, id: &str, name: &str) -> Vec<Vertex> {
     // The bundled pack loader supplies ONLY the unchanged original role body.
     // Skipping this one role removes no host solids (HostScene::vertices has no
     // anchor-dependent geometry). No preview/success setter is used as oracle.
@@ -202,12 +241,19 @@ fn fallback_body(root: &Path, theme: &hair::theme::Theme, id: &str) -> Vec<Verte
         &host,
     )
     .unwrap();
-    assert!(theme.textures.is_empty() && skipped.textures.is_empty());
+    assert_eq!(theme.textures.len(), skipped.textures.len());
+    assert!(
+        theme
+            .textures
+            .iter()
+            .zip(&skipped.textures)
+            .all(|(a, b)| Arc::ptr_eq(a, b))
+    );
     let owned = subtract(&theme.vertices, &skipped.vertices);
     let a = theme.host.anchors.iter().find(|a| a.id == id).unwrap();
     let body = subtract(&owned, &status(a, false));
     assert!(!body.is_empty() && outside(&body, a).is_empty());
-    body
+    super::local_model_preview_tests::reference_placeholder(theme, a, std::ffi::OsStr::new(name))
 }
 fn preservation(
     scene: &[Vertex],
@@ -223,7 +269,13 @@ fn preservation(
     let original = subtract(baseline, &old);
     // Retain the original ordered outside-envelope assertion minus ONLY the
     // explicitly declared decorations. Any unexpected outside vertex fails.
-    assert_eq!(outside(&actual, a), outside(&original, a));
+    assert_eq!(
+        outside(
+            &subtract(&actual, &declared_plane(a, texture, material, false)),
+            a
+        ),
+        outside(&subtract(&original, body), a)
+    );
     // Also compare the entire remainder, removing only the exact source body
     // and declared full plane. No unowned vertex, even inside the envelope, is
     // exempted. Colors, UVs, material, count, multiplicity and order all matter.
@@ -401,6 +453,8 @@ fn aim(app: &mut App, name: &str) -> String {
     let a = host.anchors.iter().find(|a| a.id == id).unwrap();
     let inward = host.portal_inward(&id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [a.at[0] + 1.05 * inward[0], a.at[2] + 1.05 * inward[1]],
         yaw: (-inward[0]).atan2(inward[1]),
         pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / 1.05).atan(),
@@ -519,18 +573,27 @@ fn world_consumer(app: &App, id: &str, texture: &Arc<Texture>, image_fit: bool) 
         .iter()
         .filter(|v| v.texture == (material | 0x8000_0000))
         .collect();
+    let a = theme.host.anchors.iter().find(|a| a.id == id).unwrap();
+    let reference = declared_plane(a, texture, material, image_fit)
+        .into_iter()
+        .filter(|v| v.texture == (material | 0x8000_0000))
+        .collect::<Vec<_>>();
+    assert!(!reference.is_empty());
     assert_eq!(
         plane.len(),
-        6,
-        "source texture must reach world document plane"
+        reference.len(),
+        "source pixels must reach the authored item surface"
     );
-    let a = theme.host.anchors.iter().find(|a| a.id == id).unwrap();
-    let complete: Vec<_> = plane.iter().map(|v| **v).collect();
-    assert_eq!(
-        bytemuck::cast_slice::<Vertex, u8>(&complete),
-        bytemuck::cast_slice::<Vertex, u8>(&declared_plane(a, texture, material, image_fit)),
-        "VIDEO_COMPLETE_SOURCE_PLANE_UNCHANGED",
-    );
+    for (actual, expected) in plane.iter().zip(&reference) {
+        assert!((0..3).all(|i| (actual.position[i] - expected.position[i]).abs() <= EPS));
+        assert_eq!(
+            (actual.uv, actual.color, actual.texture),
+            (expected.uv, expected.color, expected.texture)
+        );
+    }
+    if !image_fit {
+        return scene;
+    }
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     for v in &plane {
@@ -541,16 +604,11 @@ fn world_consumer(app: &App, id: &str, texture: &Arc<Texture>, image_fit: bool) 
     }
     let width = max[0] - min[0];
     let height = max[1] - min[1];
-    let scale = if image_fit {
-        let usable_height = a.size[1] - 0.06_f32.min(a.size[1] * 0.5) * 2.0;
-        (a.size[0] / texture.width as f32).min(usable_height / texture.height as f32)
-    } else {
-        (a.size[0] / texture.width as f32).min(a.size[1] / texture.height as f32)
-    };
+    let scale = (0.8 / texture.width as f32).min(0.85 / texture.height as f32);
     assert!((width - texture.width as f32 * scale).abs() <= EPS);
     assert!((height - texture.height as f32 * scale).abs() <= EPS);
     assert!(((min[0] + max[0]) * 0.5 - a.at[0]).abs() <= EPS);
-    assert!(((min[1] + max[1]) * 0.5 - a.at[1] - a.size[1] * 0.5).abs() <= EPS);
+    assert!((min[1] - a.at[1] - a.size[1] - 0.12).abs() <= EPS);
     assert!((max[2] - min[2]).abs() <= EPS);
     assert!(min[2] >= a.at[2] - a.size[2] * 0.5 - EPS);
     assert!(max[2] <= a.at[2] + a.size[2] * 0.5 + EPS);
@@ -613,7 +671,7 @@ fn authentic_mp4_before_e_source_rgba_fit_raw_escape_and_reused_slot() {
     let pose = (app.pose.position, app.pose.yaw, app.pose.pitch);
     let current = app.world.current.clone();
     let baseline = app.themes[0].vertices_for(&app.world);
-    let body = fallback_body(&root, &app.themes[0], &id);
+    let body = fallback_body(&root, &app.themes[0], &id, NAME);
     let stored_base = bytemuck::cast_slice::<Vertex, u8>(&app.themes[0].vertices).to_vec();
     assert_eq!(hair::folder_scene::display(&bound.entry.name), DISPLAY);
     assert_eq!(hair::folder_scene::kind(&bound.entry), FULL_KIND);
@@ -697,7 +755,7 @@ fn authentic_mp4_before_e_source_rgba_fit_raw_escape_and_reused_slot() {
     assert_eq!(next_id, id, "must genuinely reuse the document slot");
     assert!(app.object_previews.cache.is_empty());
     let next_baseline = app.themes[0].vertices_for(&app.world);
-    let next_body = fallback_body(&root, &app.themes[0], &next_id);
+    let next_body = fallback_body(&root, &app.themes[0], &next_id, "Replacement.png");
     let next_pack_count = app.themes[0].textures.len();
     let next = published(&mut app, &next_id, "REPLACEMENT_PNG_MISSING");
     assert_eq!([next.width, next.height], [1, 1]);
@@ -761,7 +819,7 @@ fn theme_controlled_admission_only_success_vs_pending_refused_and_png_decoration
         .unwrap()
         .clone();
     let baseline = app.themes[0].vertices_for(&app.world);
-    let body = fallback_body(&root, &app.themes[0], &id);
+    let body = fallback_body(&root, &app.themes[0], &id, NAME);
     let ordinary = decorations(&anchor, DISPLAY, FULL_KIND, false);
     subtract(&baseline, &ordinary); // queued intent/MP4 suffix alone stays ordinary
     let pack_count = app.themes[0].textures.len();
@@ -839,7 +897,7 @@ fn theme_controlled_admission_only_success_vs_pending_refused_and_png_decoration
     let next_id = aim(&mut app, "Replacement.png");
     assert_eq!(next_id, id);
     let next_baseline = app.themes[0].vertices_for(&app.world);
-    let next_body = fallback_body(&root, &app.themes[0], &next_id);
+    let next_body = fallback_body(&root, &app.themes[0], &next_id, "Replacement.png");
     let next_anchor = app.themes[0]
         .host
         .anchors

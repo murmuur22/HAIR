@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 mod gpu;
 #[path = "workshop_ui.rs"]
 mod ui;
+#[path = "workshop_catalog.rs"]
+mod catalog;
+#[path = "workshop_sky.rs"]
+mod sky;
 pub use gpu::WorkshopGpu;
 #[path = "workshop_camera.rs"]
 mod camera;
@@ -14,8 +18,11 @@ pub use camera::InspectionCamera;
 /// A UI request, not permission to bypass the core loader or exclusive writers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DialogKind {
+    CatalogImport,
+    CatalogReplace,
     WallTexture,
     FloorTexture,
+    SkyPanorama,
     Import,
     Open,
     SaveNew,
@@ -24,11 +31,13 @@ pub enum DialogKind {
 
 fn selection_error(kind: DialogKind, selected: Option<&Path>, error: &str) -> String {
     let (action, help) = match kind {
+        DialogKind::CatalogImport | DialogKind::CatalogReplace => ("Catalog GLB transaction", "Choose a supported local GLB; replacement is explicit and affects every referencing choice."),
         DialogKind::WallTexture | DialogKind::FloorTexture => (
             "Importing surface PNG",
             "Choose a local static PNG, 1..1024 pixels per axis; last-good texture is retained on errors.",
         ),
         DialogKind::Import => ("Importing model", "Choose an existing supported .glb file."),
+        DialogKind::SkyPanorama => ("Importing sky panorama PNG", "Choose a bounded static .png; arbitrary aspect ratios use centered Fill and the default background. Last-good sky is retained."),
         DialogKind::Open => (
             "Opening editable project",
             "Choose project.toml inside an existing editable project folder.",
@@ -55,6 +64,8 @@ pub enum Command {
     SelectModel(bool),
     NewMaterial,
     ClearSurface(&'static str),
+    ApplySkyColour,
+    ClearSky,
     Import,
     Open,
     SaveNew,
@@ -99,6 +110,13 @@ pub struct Workshop {
     keyboard_was_editing: bool,
     pending: Option<Pending>,
     dialog: Option<(DialogKind, bool)>,
+    catalog_dialog: Option<catalog::Snapshot>,
+    sky_dialog: Option<sky::Snapshot>,
+    sky_draft: [String; 3],
+    catalog_draft: catalog::Draft,
+    catalog_selection: Option<String>,
+    pub(crate) view_revision: u64,
+    input_rearm: bool,
 }
 impl Workshop {
     pub fn new(protected: Vec<PathBuf>) -> Self {
@@ -118,11 +136,20 @@ impl Workshop {
             should_close: false,
             pending: None,
             dialog: None,
+            catalog_dialog: None,
+            sky_dialog: None,
+            sky_draft: ["0.04".into(), "0.06".into(), "0.05".into()],
+            catalog_draft: Default::default(),
+            catalog_selection: None,
+            view_revision: 0,
+            input_rearm: false,
             controls: Default::default(),
             camera: InspectionCamera::default(),
             category: "document",
             keyboard_was_editing: false,
             inspection: crate::Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: [0.0, 3.5],
                 yaw: 0.0,
                 pitch: -0.2,
@@ -136,6 +163,12 @@ impl Workshop {
     pub fn request_dialog(&mut self, kind: DialogKind) {
         self.camera.release();
         if self.dialog.is_none() && self.pending.is_none() && !self.should_close {
+            if matches!(kind, DialogKind::CatalogImport | DialogKind::CatalogReplace) {
+                self.catalog_dialog = Some(self.catalog_snapshot(kind));
+            }
+            if kind == DialogKind::SkyPanorama {
+                self.sky_dialog = Some(self.sky_snapshot(kind));
+            }
             self.dialog = Some((kind, false));
         }
     }
@@ -154,6 +187,9 @@ impl Workshop {
             return;
         };
         self.dialog = None;
+        self.input_rearm = true;
+        let catalog_snapshot = self.catalog_dialog.take();
+        let sky_snapshot = self.sky_dialog.take();
         let selected = result.as_ref().ok().and_then(|p| p.clone());
         let old_paths = (
             self.input_path.clone(),
@@ -168,6 +204,10 @@ impl Workshop {
                 .to_str()
                 .ok_or("Selected path must be UTF-8; no lossy path conversion is performed")?;
             match kind {
+                DialogKind::SkyPanorama => self.finish_sky_pick(sky_snapshot.ok_or("Sky chooser snapshot missing")?, &path),
+                DialogKind::CatalogImport | DialogKind::CatalogReplace => {
+                    self.finish_catalog_pick(catalog_snapshot.ok_or("Catalog chooser snapshot missing")?, &path)
+                }
                 DialogKind::WallTexture | DialogKind::FloorTexture => {
                     let surface = if kind == DialogKind::WallTexture {
                         "wall"
@@ -221,6 +261,7 @@ impl Workshop {
         self.pending.is_some()
     }
     fn install(&mut self, project: Project, preview: Theme, dirty: bool) {
+        self.reset_catalog_context();
         self.frame_camera();
         if !dirty && let Some(parent) = project.source().parent() {
             self.protected.push(parent.to_path_buf());
@@ -231,7 +272,7 @@ impl Workshop {
             project.source().parent().map(|p| p.join("project.toml"))
         };
         self.exported_pack = None;
-        if !matches!(self.category, "wall" | "floor") {
+        if !matches!(self.category, "wall" | "floor" | "catalog" | "sky") {
             self.category = if project.door_active {
                 "door-trim"
             } else if project.document_role {
@@ -241,6 +282,7 @@ impl Workshop {
             };
         }
         self.project = Some(project);
+        self.load_sky_draft();
         self.preview = Some(preview);
         self.dirty = dirty;
         self.revision += 1;
@@ -257,8 +299,20 @@ impl Workshop {
         if self.dialog.is_some() {
             return;
         }
-        if matches!(command, Command::Import) && matches!(self.category, "wall" | "floor") {
-            let kind = if self.category == "wall" {
+        if self.pending.is_some() && !matches!(command, Command::Cancel | Command::ConfirmDiscard | Command::AcknowledgeError) {
+            return;
+        }
+        if matches!(command, Command::Import) && self.category == "catalog" {
+            self.request_dialog(DialogKind::CatalogImport);
+            if self.begin_dialog().is_some() {
+                self.finish_dialog(Ok(Some(PathBuf::from(&self.input_path))));
+            }
+            return;
+        }
+        if matches!(command, Command::Import) && matches!(self.category, "wall" | "floor" | "sky") {
+            let kind = if self.category == "sky" {
+                DialogKind::SkyPanorama
+            } else if self.category == "wall" {
                 DialogKind::WallTexture
             } else {
                 DialogKind::FloorTexture
@@ -284,6 +338,15 @@ impl Workshop {
     }
     fn apply(&mut self, command: Command) -> Result<()> {
         match command {
+            Command::ApplySkyColour => {
+                let rgb = self.sky_colour_values()?;
+                let theme = self.project.as_mut().ok_or("Start a pack first")?.set_sky_colour(rgb)?;
+                self.sky_committed(theme, "Applied explicit linear-light colour");
+            }
+            Command::ClearSky => {
+                let theme = self.project.as_mut().ok_or("Start a pack first")?.clear_sky()?;
+                self.sky_committed(theme, "Cleared Sky to Legacy (no explicit sky)");
+            }
             Command::Door | Command::SelectModel(_) => {
                 let p = self.project.as_mut().ok_or("Start a pack first")?;
                 match command {

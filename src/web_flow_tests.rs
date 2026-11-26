@@ -157,6 +157,8 @@ fn actual_address_two_origin_read_follow_back_mutation() {
         assert_eq!(a.theme_index, 1);
         assert_eq!(a.themes[1].source, pack_source);
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 3.5],
             yaw: 0.0,
             pitch: -0.15,
@@ -170,6 +172,8 @@ fn actual_address_two_origin_read_follow_back_mutation() {
             .find(|x| x.role == "document")
             .unwrap();
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [document.at[0], document.at[2] + 1.5],
             yaw: 0.0,
             pitch: -0.1,
@@ -214,6 +218,8 @@ fn actual_address_two_origin_read_follow_back_mutation() {
             .find(|x| x.role == "document")
             .unwrap();
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [document.at[0], document.at[2] + 1.5],
             yaw: 0.0,
             pitch: -0.1,
@@ -258,6 +264,8 @@ fn actual_address_two_origin_read_follow_back_mutation() {
         for z in [-2.4, -2.2, -2.0] {
             for dx in [-0.3, 0.0, 0.3] {
                 let pose = Pose {
+                    eye_offset: 1.65,
+                    feet_y: 0.0,
                     position: [anchor.at[0] + dx, z],
                     yaw: 0.0,
                     pitch: -0.5,

@@ -76,6 +76,8 @@ fn rapid_physical_play_pause_before_first_app_poll_does_not_decode() {
     let anchor = host.anchors.iter().find(|a| a.id == id).unwrap();
     let inward = host.portal_inward(&id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [
             anchor.at[0] + 1.05 * inward[0],
             anchor.at[2] + 1.05 * inward[1],
@@ -312,21 +314,26 @@ fn ended_seek_then_space_is_independent_of_app_poll() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .canonicalize()
         .unwrap();
-    let workspace = root.parent().unwrap();
-    assert_eq!(
-        workspace,
-        std::path::Path::new(
-            &std::env::var("HAIR_TEST_WORKSPACE")
-                .expect("explicit owned qualification workspace required")
-        )
-    );
+    // Bind execution to the explicitly owned candidate, not a historical user's
+    // absolute path. Canonical sibling TMPDIR keeps all mutations outside source.
+    let workspace = std::path::PathBuf::from(
+        std::env::var_os("HAIR_TEST_WORKSPACE").expect("explicit candidate-owned workspace"),
+    )
+    .canonicalize()
+    .unwrap();
+    assert_eq!(Some(workspace.as_path()), root.parent());
+    let temp = std::path::PathBuf::from(
+        std::env::var_os("TMPDIR").expect("explicit candidate-owned TMPDIR"),
+    )
+    .canonicalize()
+    .unwrap();
+    assert_eq!(temp.parent(), Some(workspace.as_path()));
+    assert!(!temp.starts_with(&root) && !root.starts_with(&temp));
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let fixture_path = workspace
-        .join("audio-repair")
-        .join(format!("ended-order-{}-{unique}", std::process::id()));
+    let fixture_path = temp.join(format!("ended-order-{}-{unique}", std::process::id()));
     std::fs::create_dir(&fixture_path).unwrap();
     let fixture = Fixture(fixture_path);
     let selected = fixture.0.join("selected");
@@ -386,6 +393,8 @@ fn ended_seek_then_space_is_independent_of_app_poll() {
     let anchor = host.anchors.iter().find(|a| a.id == id).unwrap();
     let inward = host.portal_inward(&id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [
             anchor.at[0] + 1.05 * inward[0],
             anchor.at[2] + 1.05 * inward[1],

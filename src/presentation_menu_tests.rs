@@ -28,6 +28,87 @@ fn focused(a: &App) -> Item {
 }
 
 #[test]
+fn sandbox_theme_settings_reachable_without_t_shortcut() {
+    let mut a = app();
+    tap(&mut a, KeyCode::Escape);
+    a.activate_menu(Item::Settings);
+    assert!(
+        a.menu.unwrap().items().contains(&Item::Appearance),
+        "appearance must be reachable in Settings"
+    );
+    a.activate_menu(Item::Appearance);
+    assert_eq!(a.menu.unwrap().view, View::Appearance);
+    let before = a.theme_index;
+    let pose = a.pose;
+    let current = a.world.current.clone();
+    a.activate_menu(Item::Theme);
+    assert_eq!(a.theme_index, (before + 1) % a.themes.len());
+    assert_eq!(
+        (a.pose.position, a.pose.yaw, a.pose.pitch),
+        (pose.position, pose.yaw, pose.pitch)
+    );
+    assert_eq!(a.world.current, current);
+    for category in hair::appearance::CATEGORIES {
+        assert!(!a.appearance.overridden(category));
+        a.activate_menu(Item::Override(category));
+        assert!(a.appearance.overridden(category));
+    }
+    tap(&mut a, KeyCode::Escape);
+    assert_eq!(a.menu.unwrap().view, View::Settings);
+    tap(&mut a, KeyCode::Escape);
+    tap(&mut a, KeyCode::Escape);
+    let before = a.theme_index;
+    a.input.captured = true;
+    tap(&mut a, KeyCode::KeyT);
+    assert_eq!(a.theme_index, before, "T is no longer a theme shortcut");
+    assert!(a.input.captured, "T must not consume camera capture either");
+}
+
+#[test]
+fn sandbox_appearance_controls_fit_minimum_window_and_share_hit_geometry() {
+    let menu = hair::presentation::Menu {
+        view: View::Appearance,
+        focus: 0,
+    };
+    let buttons = hair::presentation::layout(&menu, 100, [640, 480]);
+    assert_eq!(buttons.len(), 8);
+    for (item, [x, y, w, h]) in buttons {
+        assert!(x >= 0.0 && y >= 0.0 && x + w <= 640.0 && y + h <= 480.0);
+        assert_eq!(
+            hair::presentation::hit(
+                &menu,
+                [640, 480],
+                100,
+                [(x + w / 2.0) as f64, (y + h / 2.0) as f64]
+            ),
+            Some(item)
+        );
+    }
+}
+
+#[test]
+fn settings_file_tree_toggle_works_with_keyboard_and_pointer() {
+    let mut a = app();
+    let old = a.world.tree_collapsed;
+    tap(&mut a, KeyCode::Escape);
+    tap(&mut a, KeyCode::ArrowDown);
+    tap(&mut a, KeyCode::Enter);
+    tap(&mut a, KeyCode::Enter); // Settings > Player Settings
+    for _ in 0..3 {
+        tap(&mut a, KeyCode::ArrowDown);
+    }
+    tap(&mut a, KeyCode::Enter);
+    assert_eq!(
+        a.world.tree_collapsed, !old,
+        "Player Settings item 4 toggles the file tree"
+    );
+    assert_eq!(a.menu.unwrap().view, View::PlayerSettings);
+    let menu = a.menu.unwrap();
+    let (_, r) = hair::presentation::layout(&menu, 100, [960, 640])[3];
+    a.menu_click([(r[0] + r[2] * 0.5) as f64, (r[1] + r[3] * 0.5) as f64]);
+    assert_eq!(a.world.tree_collapsed, old);
+}
+#[test]
 fn world_escape_opens_paused_menu_and_releases_cursor_instead_of_quitting() {
     let mut a = app();
     a.input.captured = true;
@@ -36,6 +117,10 @@ fn world_escape_opens_paused_menu_and_releases_cursor_instead_of_quitting() {
         !a.key(KeyCode::Escape, true, false).unwrap(),
         "world Escape must not request exit"
     );
+    assert!(a.menu.is_none(), "first captured Escape only unlocks");
+    assert!(!a.input.captured && !a.input.forward);
+    a.key(KeyCode::Escape, false, false).unwrap();
+    tap(&mut a, KeyCode::Escape);
     assert_eq!(a.menu.map(|m| m.view), Some(View::Pause));
     assert_eq!(focused(&a), Item::Resume);
     assert!(
@@ -140,6 +225,8 @@ fn repeated_or_held_escape_cannot_chain_menu_transitions() {
 fn menu_isolates_world_theme_navigation_url_and_loading_hotkeys() {
     let mut a = app();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, -3.0],
         yaw: 0.0,
         pitch: -0.1,
@@ -231,6 +318,8 @@ fn address_then_reader_take_escape_before_the_world_menu() {
         "Escape closed address only"
     );
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, 1.8],
         yaw: 0.0,
         pitch: -0.5,
@@ -291,7 +380,15 @@ fn pointer_hits_match_rendered_buttons_across_scale_resize_and_hidpi() {
         [1280, 720],
     ] {
         for percent in STEPS {
-            for menu in [Menu::pause(), Menu::quit_confirm(), Menu::settings()] {
+            for menu in [
+                Menu::pause(),
+                Menu::quit_confirm(),
+                Menu::settings(),
+                Menu {
+                    view: View::PlayerSettings,
+                    focus: 0,
+                },
+            ] {
                 let rects = rendered_buttons(&menu, percent, size);
                 assert_eq!(rects.len(), menu.items().len(), "{size:?} {percent}%");
                 for (item, [x0, y0, x1, y1]) in menu.items().iter().zip(&rects) {
@@ -335,6 +432,7 @@ fn clicking_rendered_buttons_drives_the_app_and_never_captures() {
     assert!(a.menu.is_some() && !a.input.captured);
     assert!(!a.menu_click(centre(&a, Item::Settings)));
     assert_eq!(a.menu.map(|m| m.view), Some(View::Settings));
+    assert!(!a.menu_click(centre(&a, Item::PlayerSettings)));
     assert!(!a.menu_click(centre(&a, Item::Larger)));
     assert_eq!(a.ui_scale, 125, "click applies immediately");
     // Rendered layout changes with scale; the click must follow the new rects.
@@ -342,6 +440,7 @@ fn clicking_rendered_buttons_drives_the_app_and_never_captures() {
     assert_eq!(a.ui_scale, 150);
     assert!(!a.menu_click(centre(&a, Item::Reset)));
     assert_eq!(a.ui_scale, 100);
+    assert!(!a.menu_click(centre(&a, Item::Back)));
     assert!(!a.menu_click(centre(&a, Item::Back)));
     assert!(!a.menu_click(centre(&a, Item::Resume)));
     assert!(
@@ -364,8 +463,19 @@ fn small_window_at_max_scale_shows_capped_label_and_keeps_recovery_reachable() {
         partial.contains("WINDOW LIMIT") && partial.contains("144%"),
         "{partial}"
     );
-    let settings = rendered_buttons(&Menu::settings(), 200, [640, 480]);
-    assert_eq!(settings.len(), 4, "Smaller/Larger/Reset/Back all reachable");
+    let settings = rendered_buttons(
+        &Menu {
+            view: View::PlayerSettings,
+            focus: 0,
+        },
+        200,
+        [640, 480],
+    );
+    assert_eq!(
+        settings.len(),
+        9,
+        "Smaller/Larger/Reset/File tree/Fog/Distance/Tint/Storage/Back all reachable"
+    );
 }
 
 #[test]
@@ -450,19 +560,30 @@ fn rendered_menu_scale_survives_real_theme_switch_and_captures() {
     };
     capture(&a, "settings-200.png");
     tap(&mut a, KeyCode::Escape);
+    tap(&mut a, KeyCode::Escape);
     capture(&a, "pause-200-stale-until-update.png");
     a.update_hud();
     capture(&a, "pause-200.png");
-    tap(&mut a, KeyCode::Escape);
-    tap(&mut a, KeyCode::KeyT);
-    assert_eq!(a.theme_index, 1, "real T switch with a renderer");
+    a.activate_menu(Item::Settings);
+    activate(&mut a, Item::Appearance);
+    activate(&mut a, Item::Theme);
+    for _ in 0..3 {
+        tap(&mut a, KeyCode::Escape);
+    }
+    assert_eq!(a.theme_index, 1, "actual Appearance switch with a renderer");
     a.update_hud();
     assert_eq!(a.renderer.as_ref().unwrap().ui_scale, 200);
     assert_eq!(a.renderer.as_ref().unwrap().ui_viewport(), [960, 640]);
     capture(&a, "world-archive-200.png");
     // Keep the strict scene-diversity capture guard: the tiny archive view is
     // legitimately only17 colors. Inspect the small menu over the richer office.
-    tap(&mut a, KeyCode::KeyT);
+    tap(&mut a, KeyCode::Escape);
+    a.activate_menu(Item::Settings);
+    activate(&mut a, Item::Appearance);
+    activate(&mut a, Item::Theme);
+    for _ in 0..3 {
+        tap(&mut a, KeyCode::Escape);
+    }
     assert_eq!(a.theme_index, 0);
     a.renderer.as_mut().unwrap().resize([640, 480]);
     tap(&mut a, KeyCode::Escape);
@@ -475,6 +596,8 @@ fn open_settings_from_pause(a: &mut App) {
     tap(a, KeyCode::ArrowDown);
     tap(a, KeyCode::Enter);
     assert_eq!(a.menu.map(|m| m.view), Some(View::Settings));
+    tap(a, KeyCode::Enter);
+    assert_eq!(a.menu.map(|m| m.view), Some(View::PlayerSettings));
 }
 
 fn open_settings(a: &mut App) {
@@ -482,8 +605,14 @@ fn open_settings(a: &mut App) {
     tap(a, KeyCode::ArrowDown);
     tap(a, KeyCode::Enter);
     assert_eq!(a.menu.map(|m| m.view), Some(View::Settings));
+    tap(a, KeyCode::Enter);
+    assert_eq!(a.menu.map(|m| m.view), Some(View::PlayerSettings));
 }
 fn activate(a: &mut App, item: Item) {
+    assert!(
+        a.menu.unwrap().items().contains(&item),
+        "item must be reachable"
+    );
     while focused(a) != item {
         tap(a, KeyCode::ArrowDown);
     }
@@ -518,6 +647,8 @@ fn settings_scale_steps_are_bounded_immediate_and_resettable() {
     activate(&mut a, Item::Reset);
     assert_eq!(a.ui_scale, 100);
     activate(&mut a, Item::Back);
+    assert_eq!(a.menu.map(|m| m.view), Some(View::Settings));
+    activate(&mut a, Item::Back);
     assert_eq!(a.menu.map(|m| m.view), Some(View::Pause));
     assert_eq!(
         hair::presentation::step_scale(90, false),
@@ -535,12 +666,15 @@ fn scale_is_session_wide_across_theme_world_navigation_and_focus() {
     activate(&mut a, Item::Larger);
     tap(&mut a, KeyCode::Escape);
     tap(&mut a, KeyCode::Escape);
+    tap(&mut a, KeyCode::Escape);
     assert!(a.menu.is_none());
     assert_eq!(a.ui_scale, 150);
     // T only switches with a GPU renderer (switch_theme); renderer-held scale
     // across a real T is covered by the GPU-gated renderer test below.
     tap(&mut a, KeyCode::KeyT);
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, -3.0],
         yaw: 0.0,
         pitch: -0.1,

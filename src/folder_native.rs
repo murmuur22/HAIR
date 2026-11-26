@@ -50,10 +50,19 @@ mod raw_reader;
 mod raw_reader_qualification_tests;
 mod video_still;
 
+#[derive(Clone)]
+struct RouteStop {
+    destination: hair::local_explorer::Destination,
+    entry: hair::directory_map::RouteEntry,
+    visit: Visit,
+}
 pub(super) struct Local {
     pub explorer: Explorer,
     reader: Option<raw_reader::Session>,
     pub page: usize,
+    places: std::collections::BTreeMap<hair::directory_map::Id, hair::local_explorer::Destination>,
+    trail: VecDeque<RouteStop>,
+    record_visit: bool,
     // Exactly aligned with Explorer's bounded handle history, not an ancestry cache.
     poses: VecDeque<Visit>,
 }
@@ -66,6 +75,7 @@ enum Arrival {
         doorway: [f32; 2],
         departure: Pose,
     },
+    Entry,
 }
 #[derive(Clone, Copy)]
 enum Change {
@@ -73,6 +83,7 @@ enum Change {
     Up,
     Back,
     Refresh,
+    Placed(usize),
     Page(usize),
     Continue(folder_scene::Continuation),
 }
@@ -90,6 +101,8 @@ impl App {
         }
     }
     fn modal_reset(&mut self) {
+        self.sidebar_press = None;
+        self.sidebar_wheel = 0.0;
         self.release();
         // Keep the claiming O latch until its physical release. Other pre-modal
         // held actions are cleared and synthetic repeats remain suppressed.
@@ -121,8 +134,11 @@ impl App {
             page: 0,
             reader: None,
             poses: VecDeque::new(),
+            places: Default::default(),
+            trail: Default::default(),
+            record_visit: true,
         };
-        self.install_local(local, None, None)?;
+        self.install_local(local, None, None, hair::directory_map::Relation::Selection)?;
         // No workers remain at this boundary; drop HTTPS history/state, never
         // manufacture a URL or carry its link/image authority into folder mode.
         self.web = None;
@@ -131,18 +147,45 @@ impl App {
     }
     fn install_local(
         &mut self,
-        local: Local,
+        mut local: Local,
         retained_pose: Option<Pose>,
         arrival: Option<Arrival>,
+        relation: hair::directory_map::Relation,
     ) -> Result<()> {
-        let (world, host) = folder_scene::build(
+        let (world, mut host) = folder_scene::build(
             local.explorer.current(),
             local.page,
             self.world.tree_collapsed,
         )?;
-        let doorway_pose = if let Some(arrival) = arrival {
+        let layout_notes = match hair::placement_scene::install(&local.explorer, &world, &mut host)
+        {
+            Ok(notes) => notes,
+            Err(e) => vec![format!(
+                "Saved placement unavailable: {e}; generated arrangement retained"
+            )],
+        };
+        let doorway_pose = if matches!(arrival, Some(Arrival::Entry)) {
+            let position = host
+                .anchors
+                .iter()
+                .find(|a| a.id == folder_scene::PARENT_PORTAL)
+                .map(|a| [a.at[0], a.at[2] - 1.05])
+                .unwrap_or(host.spawn);
+            if host.blocked(position) {
+                return Err("Entry arrival is blocked; last good place retained".into());
+            }
+            host.check_routes(&[position])?;
+            Some(Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
+                position,
+                yaw: 0.0,
+                pitch: 0.0,
+            })
+        } else if let Some(arrival) = arrival {
             let view = world.folder_view.as_ref().ok_or("Missing folder view")?;
             let anchor = match arrival {
+                Arrival::Entry => None,
                 Arrival::Continuation(action) => host
                     .anchors
                     .iter()
@@ -168,6 +211,7 @@ impl App {
                         departure
                     } else {
                         Pose {
+                            feet_y: 0.0,
                             position: [
                                 departure.position[0] + (destination[0] - doorway[0]),
                                 departure.position[1] + (destination[1] - doorway[1]),
@@ -180,6 +224,8 @@ impl App {
                 _ => {
                     let inward = host.portal_inward(&anchor.id);
                     Pose {
+                        eye_offset: 1.65,
+                        feet_y: 0.0,
                         position: [
                             anchor.at[0] + inward[0] * 1.05,
                             anchor.at[2] + inward[1] * 1.05,
@@ -208,6 +254,7 @@ impl App {
                 Ok(staged)
             })
             .collect::<Result<Vec<_>>>()?;
+        themes[self.theme_index].validate_decorations()?;
         let mut pose = Pose::default();
         themes[self.theme_index].respawn(&mut pose);
         if let Some(old) = retained_pose.filter(|p| !host.blocked(p.position)) {
@@ -216,23 +263,75 @@ impl App {
         if let Some(arrival) = doorway_pose {
             pose = arrival;
         }
+        // Stage metadata-only map work before the last fallible renderer step.
+        let mut next_map = self.directory_map.as_ref().clone();
+        next_map.observe(
+            local.explorer.current(),
+            local.explorer.map_identity()?,
+            local.explorer.map_back_identity()?,
+            local.page,
+            host.room,
+            relation,
+        );
+        let current = next_map.current.ok_or("Missing committed map identity")?;
+        let node = &next_map.nodes[current];
+        local
+            .places
+            .retain(|id, _| next_map.nodes.iter().any(|n| n.id == *id));
+        local
+            .places
+            .entry(node.id)
+            .or_insert_with(|| local.explorer.destination());
+        let entry = hair::directory_map::RouteEntry {
+            id: node.id,
+            name: node.name.clone(),
+            page: local.page,
+        };
+        if local.record_visit {
+            if local.trail.len() == MAX_HISTORY {
+                local.trail.pop_front();
+            }
+            local.trail.push_back(RouteStop {
+                destination: local.places[&node.id].clone(),
+                entry,
+                visit: Visit {
+                    page: local.page,
+                    pose,
+                    child: None,
+                },
+            });
+        } else if let Some(last) = local.trail.back_mut() {
+            last.entry = entry;
+        }
+        next_map.history = local.trail.iter().map(|v| v.entry.clone()).collect();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_theme_appearance(&themes[self.theme_index])?;
             renderer.set_scene(&themes[self.theme_index].vertices_for(&world));
         }
         // All fallible scene/theme/material staging completed before model commit.
+        self.disown_document_intent();
         self.discard_local_reader();
+        self.sidebar_snapshot = Some(std::sync::Arc::new(local.explorer.current().clone()));
+        self.sidebar_offset = 0;
+        self.sidebar_wheel = 0.0;
+        self.sidebar_press = None;
         self.local = Some(local);
+        self.directory_map = std::sync::Arc::new(next_map);
         self.world = world;
         self.themes = themes;
         if let Some(view) = &self.world.folder_view {
             self.object_previews.room(view);
         }
         self.pose = pose;
+        self.player = Default::default();
         self.scroll = 0;
         self.wheel_rows = 0.0;
         self.release();
         self.local_status = match arrival {
+            Some(Arrival::Entry) => {
+                "Read-only | map travel; entry doorway facing inward (root uses entry position)"
+                    .into()
+            }
             Some(Arrival::Continuation(_)) => {
                 "Read-only | same folder; arrived inside paired doorway facing inward".into()
             }
@@ -246,16 +345,41 @@ impl App {
                 "Read-only | safe prior pose retained when possible; otherwise room spawn".into()
             }
         };
+        if !layout_notes.is_empty() {
+            self.local_status = format!("LAYOUT: {}", layout_notes.join(" | "));
+        }
+        for theme in &self.themes {
+            if let Some(reason) = theme.unavailable_reason() {
+                self.local_status.push_str(&format!("\nAppearance {} UNAVAILABLE: {reason}; saved records retained", theme.name));
+            }
+        }
+        for d in self.themes[self.theme_index].host.decorations.values() {
+            if let Some(note) = d.floor_fit_disclosure() {
+                self.local_status.push_str(&format!("\n{note} | tag={} | id={}", d.tag, d.placement_id));
+            }
+        }
         Ok(())
+    }
+    pub(super) fn placement_refresh(&mut self, page: usize) -> Result<()> {
+        self.local_change(Change::Placed(page))
     }
     fn local_change(&mut self, change: Change) -> Result<()> {
         let old = self.local.as_ref().ok_or("No folder selected")?;
+        let old_id = old.explorer.map_identity()?;
+        let relation = match change {
+            Change::Enter(_) => hair::directory_map::Relation::ChildOf(old_id),
+            Change::Up => hair::directory_map::Relation::ParentOf(old_id),
+            _ => hair::directory_map::Relation::Visit,
+        };
         let mut staged = Local {
             explorer: old.explorer.try_clone()?,
             page: old.page,
             // Staging never duplicates the reader handle. Failed staging leaves old intact.
             reader: None,
             poses: old.poses.clone(),
+            places: old.places.clone(),
+            trail: old.trail.clone(),
+            record_visit: !matches!(change, Change::Refresh),
         };
         let mut pose = Some(self.pose);
         let mut arrival = None;
@@ -368,6 +492,10 @@ impl App {
                 }
             }
             Change::Refresh => staged.explorer.refresh()?,
+            Change::Placed(page) => {
+                staged.explorer.refresh()?;
+                staged.page = page;
+            }
             Change::Page(page) => staged.page = page,
             Change::Continue(action) => {
                 let view = self
@@ -379,6 +507,13 @@ impl App {
                 arrival = Some(Arrival::Continuation(action));
                 pose = None;
             }
+        }
+        if let Some(last) = staged.trail.back_mut() {
+            last.visit = Visit {
+                page: old.page,
+                pose: self.pose,
+                child: child.clone(),
+            };
         }
         if matches!(change, Change::Enter(_) | Change::Up) {
             if staged.poses.len() == MAX_HISTORY {
@@ -402,7 +537,7 @@ impl App {
                 - 1,
         );
         let unmatched_parent = matches!(change, Change::Up) && arrival.is_none();
-        self.install_local(staged, pose, arrival)?;
+        self.install_local(staged, pose, arrival, relation)?;
         if unmatched_parent {
             self.local_status =
                 "Read-only | Parent; no matching child context, first room at safe spawn".into();
@@ -410,6 +545,121 @@ impl App {
             self.local_status =
                 "Read-only | Back; no matching child context, first room at safe spawn".into();
         }
+        Ok(())
+    }
+    pub(super) fn local_map_travel(
+        &mut self,
+        selection: &hair::directory_map::Confirmation,
+    ) -> Result<()> {
+        use hair::directory_map::{Relation, Target};
+        let old = self.local.as_ref().ok_or("No local folder")?;
+        let mut staged = Local {
+            explorer: old.explorer.try_clone()?,
+            page: selection.page,
+            reader: None,
+            poses: old.poses.clone(),
+            places: old.places.clone(),
+            trail: old.trail.clone(),
+            record_visit: matches!(selection.target, Target::Node(_)),
+        };
+        match selection.target {
+            Target::Node(index) => {
+                let node = self
+                    .directory_map
+                    .nodes
+                    .get(index)
+                    .ok_or("Room no longer mapped")?;
+                if node.id != selection.id {
+                    return Err("Selected room changed; select it again".into());
+                }
+                let destination = old
+                    .places
+                    .get(&node.id)
+                    .ok_or("Room handle no longer retained")?;
+                staged.explorer.jump(destination)?;
+                if staged.poses.len() == MAX_HISTORY {
+                    staged.poses.pop_front();
+                }
+                staged.poses.push_back(Visit {
+                    page: old.page,
+                    pose: self.pose,
+                    child: None,
+                });
+                if let Some(last) = staged.trail.back_mut() {
+                    last.visit.pose = self.pose;
+                    last.visit.page = old.page;
+                }
+            }
+            Target::History(index) => {
+                let stop = old.trail.get(index).ok_or("Visit no longer retained")?;
+                if stop.entry.id != selection.id || stop.entry.page != selection.page {
+                    return Err("Selected visit changed; select it again".into());
+                }
+                let route: Vec<_> = old
+                    .trail
+                    .iter()
+                    .take(index + 1)
+                    .map(|v| v.destination.clone())
+                    .collect();
+                staged.explorer.restore_route(&route)?;
+                staged.poses = old
+                    .trail
+                    .iter()
+                    .take(index)
+                    .map(|v| v.visit.clone())
+                    .collect();
+                staged.trail.truncate(index + 1);
+            }
+        }
+        if staged.explorer.map_identity()? != selection.id {
+            return Err("Retained room identity mismatch".into());
+        }
+        staged.page = staged.page.min(
+            staged
+                .explorer
+                .current()
+                .entries
+                .len()
+                .div_ceil(folder_scene::PAGE_SIZE)
+                .max(1)
+                - 1,
+        );
+        self.install_local(staged, None, Some(Arrival::Entry), Relation::Visit)
+    }
+    /// Explicit sidebar acquisition uses the same retained-directory reader and
+    /// specialized sessions as E, independently of physical continuation pages.
+    pub(super) fn local_entry_reader(&mut self, index: usize) -> Result<()> {
+        let local = self.local.as_ref().ok_or("No retained folder")?;
+        let entry = local
+            .explorer
+            .current()
+            .entries
+            .get(index)
+            .ok_or("Entry no longer listed")?;
+        if entry.kind != Kind::File {
+            return Err("Only regular files can be opened from the sidebar".into());
+        }
+        let session = raw_reader::Session::open(
+            local.explorer.open_reader(index),
+            folder_scene::metadata(entry),
+        );
+        let text = session.document()?;
+        self.discard_local_reader();
+        self.local.as_mut().ok_or("No retained folder")?.reader = Some(session);
+        self.world
+            .folder_view
+            .as_mut()
+            .ok_or("Missing folder view")?
+            .reader = text;
+        self.world.reading = true;
+        self.world.reader_link = None;
+        self.world.interaction = None;
+        self.scroll = 0;
+        self.wheel_rows = 0.0;
+        self.release();
+        self.local_held.retain(|key| *key == KeyCode::Space);
+        self.tab_held = false;
+        self.shifts = [false; 2];
         Ok(())
     }
     pub(super) fn local_interact(&mut self, metadata_only: bool) -> Result<()> {
@@ -462,6 +712,16 @@ impl App {
         } else {
             return Ok(());
         };
+        if metadata_only && bound.is_some() && !self.local_status.is_empty() {
+            text.push_str(&format!("\nSTATUS (full):\n{}\n", self.local_status));
+        }
+        if metadata_only {
+            for d in self.themes[self.theme_index].host.decorations.values() {
+                if let Some(note) = d.floor_fit_disclosure() {
+                    text.push_str(&format!("\n{note} | tag={} | id={}\n", d.tag, d.placement_id));
+                }
+            }
+        }
         if metadata_only && let (Some(target), Some(bound)) = (&target, &bound) {
             // Opt-in world I snapshot only. Preserve shared metadata as the
             // exact prefix and leave E/raw-reader documents and controls alone.
@@ -678,15 +938,14 @@ impl App {
                 theme.set_folder_previews(&self.object_previews.cache);
                 theme.set_folder_models(&self.object_previews.models);
             }
+            self.editor_preview_arrival();
         }
         // Pointer-identity material cache makes this a no-upload operation on
         // ordinary redraw. Also restores mappings after renderer creation/reskin.
         if let Some(renderer) = &mut self.renderer {
             renderer.set_materials(&self.themes[self.theme_index].textures)?;
-            if changed {
-                renderer.set_scene(&self.themes[self.theme_index].vertices_for(&self.world));
-            }
         }
+        if changed { self.place_scene_refresh(); }
         let completion = self.images.poll();
         let session = self.local.as_mut().and_then(|local| local.reader.as_mut());
         if let Some(session) = session {

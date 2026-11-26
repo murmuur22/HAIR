@@ -67,6 +67,8 @@ fn aim(app: &mut App) -> String {
     let a = host.anchors.iter().find(|a| a.id == id).unwrap();
     let inward = host.portal_inward(&id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [a.at[0] + 1.05 * inward[0], a.at[2] + 1.05 * inward[1]],
         yaw: (-inward[0]).atan2(inward[1]),
         pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / 1.05).atan(),
@@ -192,16 +194,33 @@ fn world_consumer(app: &App, id: &str, texture: &Arc<hair::assets::Texture>) {
         .iter()
         .filter(|v| v.texture == (material | 0x8000_0000))
         .collect();
+    let model = hair::file_items::Catalog::builtin()
+        .unwrap()
+        .representation(
+            &app.world.folder_view.as_ref().unwrap().bindings[id]
+                .entry
+                .name,
+        );
+    let expected = super::local_model_preview_tests::reference_floating(&model.vertices, a)
+        .into_iter()
+        .filter(|v| v.texture != 0)
+        .map(|v| hair::assets::Vertex {
+            texture: material | 0x8000_0000,
+            ..v
+        })
+        .collect::<Vec<_>>();
+    assert!(!expected.is_empty() && expected.len().is_multiple_of(3));
     assert_eq!(
         plane.len(),
-        6,
-        "excerpt must use existing world document plane, not HUD/filename"
+        expected.len(),
+        "literal texture occupies the authored class-item surface, not HUD"
     );
-    for v in plane {
-        let [x, y, z] = v.position;
-        assert!(x >= a.at[0] - a.size[0] * 0.5 - 0.0001 && x <= a.at[0] + a.size[0] * 0.5 + 0.0001);
-        assert!(y >= a.at[1] - 0.0001 && y <= a.at[1] + a.size[1] + 0.0001);
-        assert!((z - a.at[2]).abs() <= a.size[2] * 0.5 + 0.0001);
+    for (actual, expected) in plane.into_iter().zip(expected) {
+        assert!((0..3).all(|i| (actual.position[i] - expected.position[i]).abs() < 0.00001));
+        assert_eq!(
+            (actual.uv, actual.color, actual.texture),
+            (expected.uv, expected.color, expected.texture)
+        );
     }
 }
 fn raw_bytes(document: &str) -> Option<Vec<u8>> {

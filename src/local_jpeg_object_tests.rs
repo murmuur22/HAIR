@@ -629,6 +629,8 @@ fn retained_jpeg_before_e_has_source_pixels_inside_document_envelope() {
             // never reposition an anchor/desk/preview or alter a collision solid.
             let distance = 1.25_f32;
             app.pose = Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: [a.at[0], a.at[2] + a.size[2] * 0.5 + distance],
                 yaw: 0.0,
                 pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / distance).atan(),
@@ -717,7 +719,8 @@ fn retained_jpeg_before_e_has_source_pixels_inside_document_envelope() {
             );
             assert_eq!(app.world.folder_view.as_ref().unwrap().bindings[id], *bound);
             assert_eq!(app.themes[0].host, host);
-            assert!(host.blocked([a.at[0], a.at[2]]) && !host.blocked(app.pose.position));
+            assert!(host.file_anchors.contains(&a.id));
+            assert!(!host.blocked([a.at[0], a.at[2]]) && !host.blocked(app.pose.position));
             host.check_routes(&[app.pose.position]).unwrap();
             assert_eq!((app.pose.position, app.pose.yaw, app.pose.pitch), pose);
             assert_eq!(app.world.interaction, target);

@@ -29,6 +29,8 @@ fn aim(a: &mut App) {
             .find(|x| &x.id == id)
             .unwrap();
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [anchor.at[0], a.themes[a.theme_index].host.room[1] + 0.5],
             yaw: 0.0,
             pitch: -0.2,
@@ -82,14 +84,14 @@ fn grouped_input_adapter_latches_context_focus_escape_and_exact_displayed_follow
     tap(&mut a, KeyCode::Escape);
     assert!(!a.input.captured);
     assert!(!a.input.forward);
-    // Presentation menu migration: world Escape now pauses (releasing capture as
-    // before); a second Escape resumes so the remaining world oracle is unchanged.
-    assert!(a.menu.is_some());
-    tap(&mut a, KeyCode::Escape);
+    // First captured Escape unlocks; it does not pause or alter selected doors.
     assert!(a.menu.is_none() && !a.input.captured);
-    let before_focus = a.world.explicit_target.clone();
     let before_doors = a.web.as_ref().unwrap().doors.clone();
     a.focus_changed(false);
+    // Focus loss already clears aim in the preserved runtime; snapshot AFTER
+    // that boundary to prove the following unfocused keys are inert.
+    let before_focus = a.world.explicit_target.clone();
+    assert!(before_focus.is_none());
     tap(&mut a, KeyCode::Tab);
     tap(&mut a, KeyCode::KeyE);
     assert!(a.web.as_ref().unwrap().pending.is_none());

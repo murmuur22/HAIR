@@ -54,8 +54,23 @@ fn empty_local_theme_has_no_visible_inert_vocabulary_props() {
                 .all(|d| !d.starts_with("ROLE_FALLBACK"))
         );
         let visible = local.vertices_for(&world);
-        if bytemuck::cast_slice::<_, u8>(&local.vertices) != bytemuck::cast_slice::<_, u8>(&shell)
-            || bytemuck::cast_slice::<_, u8>(&visible) != bytemuck::cast_slice::<_, u8>(&shell)
+        // R8 adds a cosmetic suffix, not inert vocabulary props. Preserve the
+        // exact shell prefix and require every added triangle on a metre-high edge.
+        let boundary_only = local.vertices[shell.len()..].as_chunks::<3>().0.iter().all(|tri| {
+            tri.iter().all(|v| {
+                (0.049..=1.001).contains(&v.position[1]) && v.texture == 0 && v.uv == [0.0; 2]
+            }) && [(0, 0), (0, 2), (2, 1), (2, 3)]
+                .iter()
+                .any(|&(axis, bound)| {
+                    tri.iter()
+                        .all(|v| (v.position[axis] - host.room[bound]).abs() <= 0.101)
+                })
+        });
+        if bytemuck::cast_slice::<_, u8>(&local.vertices[..shell.len()])
+            != bytemuck::cast_slice::<_, u8>(&shell)
+            || bytemuck::cast_slice::<_, u8>(&visible)
+                != bytemuck::cast_slice::<_, u8>(&local.vertices)
+            || !boundary_only
         {
             failures.push(format!(
                 "{pack}: shell={} static={} world={}",

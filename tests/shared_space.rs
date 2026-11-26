@@ -32,6 +32,8 @@ fn same_host_two_skins_preserve_markers_collision_and_content() {
         w.selected,
     );
     let pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [2.0, 2.0],
         yaw: 0.25,
         pitch: -0.2,

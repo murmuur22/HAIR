@@ -47,6 +47,8 @@ fn tap(a: &mut App, code: KeyCode) {
 }
 fn neutral(a: &mut App) {
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: a.themes[a.theme_index].host.spawn,
         yaw: 0.0,
         pitch: 0.0,
@@ -79,6 +81,8 @@ fn stale_child_refusal(a: &mut App, f: &Fixture) {
     let host = &a.themes[a.theme_index].host;
     let n = host.portal_inward(&id);
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0] + 1.05 * n[0], anchor.at[2] + 1.05 * n[1]],
         yaw: (-n[0]).atan2(n[1]),
         pitch: ((anchor.at[1] + anchor.size[1] * 0.5 - 1.65) / 1.05).atan(),
@@ -247,11 +251,22 @@ fn inspect_full_status(a: &mut App, size: [u32; 2]) {
     let mut prefix = oracle_world(&document[..end]);
     let tail_row = hair::text::local_reader_scroll_max(&prefix, size[0], size[1]);
     for collapsed in [false, true] {
+        tap(a, KeyCode::Escape); // close reader before using world Settings
         if a.world.tree_collapsed != collapsed {
-            tap(a, KeyCode::KeyM);
+            tap(a, KeyCode::Escape);
+            tap(a, KeyCode::ArrowDown);
+            tap(a, KeyCode::Enter);
+            tap(a, KeyCode::Enter); // Settings > Player Settings
+            for _ in 0..3 {
+                tap(a, KeyCode::ArrowDown);
+            }
+            tap(a, KeyCode::Enter);
+            tap(a, KeyCode::Escape);
+            tap(a, KeyCode::Escape);
+            tap(a, KeyCode::Escape);
         }
-        // Recompute after changing tree width; reset by closing/reopening actual I.
-        tap(a, KeyCode::Escape);
+        assert_eq!(a.world.tree_collapsed, collapsed);
+        // Recompute after changing tree width; reopen actual I.
         tap(a, KeyCode::KeyI);
         assert_eq!(
             a.local_status, status,

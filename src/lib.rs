@@ -1,5 +1,21 @@
 // Domain behavior remains independent of windows and GPU.
+pub mod appearance;
+pub mod fog;
+pub mod collection;
+#[cfg(target_os = "macos")]
+pub mod collection_store;
+pub mod decoration;
+pub mod directory_map;
+pub mod directory_map_view;
 pub mod exploration;
+pub mod file_items;
+pub mod inventory;
+pub mod inventory_ui;
+pub mod storage_ui;
+pub mod placement;
+pub mod placement_scene;
+pub mod placement_store;
+pub mod sidebar;
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 pub type Result<T> = std::result::Result<T, String>;
@@ -679,6 +695,10 @@ impl World {
 #[derive(Clone, Copy, Debug)]
 pub struct Pose {
     pub position: [f32; 2],
+    /// Player feet above the room floor. Planar/authored callers default to zero.
+    pub feet_y: f32,
+    /// Runtime eye above feet; fitted to closed-room headroom by the player.
+    pub eye_offset: f32,
     pub yaw: f32,
     pub pitch: f32,
 }
@@ -686,9 +706,16 @@ impl Default for Pose {
     fn default() -> Self {
         Self {
             position: [0.0, 3.0],
+            feet_y: 0.0,
+            eye_offset: 1.65,
             yaw: 0.0,
             pitch: -0.12,
         }
+    }
+}
+impl Pose {
+    pub fn eye_height(&self) -> f32 {
+        self.feet_y + self.eye_offset
     }
 }
 #[derive(Default)]
@@ -751,15 +778,18 @@ pub mod door_trim;
 pub mod highlight;
 pub mod host_scene;
 pub mod interaction;
+pub mod inventory_pointer;
 pub mod local_explorer;
 pub mod materials;
 pub mod navigation;
+pub mod player;
 pub mod presentation;
 pub mod render;
 pub mod resources;
 pub mod scene;
 pub mod sky;
 pub mod spaces;
+mod stanchions;
 pub mod text;
 pub mod theme;
 pub mod web;

@@ -42,6 +42,8 @@ fn binary_reader_shows_exact_hex_and_browses_bounded_chunks_without_page_keys() 
         .unwrap()
         .clone();
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0], anchor.at[2] + 1.05],
         yaw: 0.0,
         pitch: ((anchor.at[1] + anchor.size[1] * 0.5 - 1.65) / 1.05).atan(),

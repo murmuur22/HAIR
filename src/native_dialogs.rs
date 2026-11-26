@@ -18,6 +18,13 @@ struct Policy {
 }
 fn policy(kind: DialogKind) -> Policy {
     match kind {
+        DialogKind::CatalogImport | DialogKind::CatalogReplace => Policy {
+            title: if kind == DialogKind::CatalogImport { "Import NEW catalog asset and choice" } else { "Replace selected catalog asset source" },
+            prompt: "Choose catalog GLB",
+            name: "",
+            message: "Choose a local supported GLB. The exact requested catalog action is retained; Cancel changes nothing. Original files are never modified. Explicit replacement affects every choice referencing this asset.",
+            extension: Some("glb"),
+        },
         DialogKind::WallTexture | DialogKind::FloorTexture => Policy {
             title: if kind == DialogKind::WallTexture {
                 "Import wall PNG"
@@ -35,6 +42,13 @@ fn policy(kind: DialogKind) -> Policy {
             name: "",
             message: "Choose a supported .glb model. Original bytes are never changed.",
             extension: Some("glb"),
+        },
+        DialogKind::SkyPanorama => Policy {
+            title: "Import sky panorama PNG",
+            prompt: "Import sky PNG",
+            name: "",
+            extension: Some("png"),
+            message: "Choose a local static PNG, up to 4,000,000 bytes, 4096 pixels per axis and 4,194,304 pixels. Any aspect ratio uses centered Fill; transparency uses the default linear background. Exact source bytes are retained. Cancel changes nothing; unsafe paths and unsupported PNG profiles are refused by the shared loader.",
         },
         DialogKind::Open => Policy {
             title: "Open editable HAIR project",
@@ -145,7 +159,18 @@ mod tests {
     }
     #[test]
     fn native_policy_distinguishes_files_from_new_folders() {
+        for kind in [DialogKind::CatalogImport, DialogKind::CatalogReplace] {
+            assert_eq!(policy(kind).extension, Some("glb"));
+            assert!(policy(kind).message.contains("Cancel changes nothing"));
+        }
+        assert_ne!(policy(DialogKind::CatalogImport).title, policy(DialogKind::CatalogReplace).title);
         assert_eq!(policy(DialogKind::Import).extension, Some("glb"));
+        let sky = policy(DialogKind::SkyPanorama);
+        assert_eq!(sky.extension, Some("png"));
+        assert!(sky.title.contains("sky"));
+        assert!(sky.message.contains("Any aspect ratio"));
+        assert!(sky.message.contains("Cancel changes nothing"));
+        assert!(sky.message.contains("4,000,000"));
         assert_eq!(policy(DialogKind::Open).extension, Some("toml"));
         assert_eq!(policy(DialogKind::Open).name, "project.toml");
         assert_eq!(policy(DialogKind::SaveNew).name, "HAIR Project");

@@ -47,6 +47,76 @@ struct Validated {
     shape: Shape,
     components: usize,
     sampling: [Sampling; 3],
+    orientation: u8,
+}
+
+/// Read only IFD0's inline orientation. Never follow EXIF sub-IFD/thumbnail
+/// pointers or interpret other tags. All reads remain inside this APP segment.
+fn exif_orientation(data: &[u8]) -> Result<u8> {
+    let tiff = data.get(6..).ok_or("JPEG truncated EXIF")?;
+    let little = match tiff.get(..2) {
+        Some(b"II") => true,
+        Some(b"MM") => false,
+        _ => return Err("JPEG invalid EXIF byte order".into()),
+    };
+    let u16_at = |at: usize| -> Result<u16> {
+        let b: [u8; 2] = tiff
+            .get(at..at.checked_add(2).ok_or("EXIF offset overflow")?)
+            .ok_or("JPEG truncated EXIF short")?
+            .try_into()
+            .unwrap();
+        Ok(if little {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        })
+    };
+    let u32_at = |at: usize| -> Result<u32> {
+        let b: [u8; 4] = tiff
+            .get(at..at.checked_add(4).ok_or("EXIF offset overflow")?)
+            .ok_or("JPEG truncated EXIF long")?
+            .try_into()
+            .unwrap();
+        Ok(if little {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
+    };
+    if u16_at(2)? != 42 {
+        return Err("JPEG invalid EXIF TIFF magic".into());
+    }
+    let at = u32_at(4)? as usize;
+    if at < 8 {
+        return Err("JPEG invalid EXIF IFD offset".into());
+    }
+    let count = u16_at(at)? as usize;
+    if count > 1024 {
+        return Err("JPEG EXIF IFD entry budget exceeded".into());
+    }
+    let start = at.checked_add(2).ok_or("EXIF offset overflow")?;
+    let end = start
+        .checked_add(count * 12)
+        .and_then(|n| n.checked_add(4))
+        .ok_or("EXIF offset overflow")?;
+    if end > tiff.len() {
+        return Err("JPEG truncated EXIF IFD".into());
+    }
+    let mut orientation = None;
+    for i in 0..count {
+        let entry = start + i * 12;
+        if u16_at(entry)? == 0x0112 {
+            if orientation.is_some() || u16_at(entry + 2)? != 3 || u32_at(entry + 4)? != 1 {
+                return Err("JPEG ambiguous EXIF orientation".into());
+            }
+            let value = u16_at(entry + 8)?;
+            if !(1..=8).contains(&value) {
+                return Err("JPEG invalid EXIF orientation".into());
+            }
+            orientation = Some(value as u8);
+        }
+    }
+    Ok(orientation.unwrap_or(1))
 }
 
 fn preflight(bytes: &[u8]) -> Result<Validated> {
@@ -70,6 +140,7 @@ fn preflight(bytes: &[u8]) -> Result<Validated> {
     let mut restart_interval = 0_u16;
     let mut next_restart = 0_u8;
     let mut jfif = false;
+    let mut orientation = None;
     while at < bytes.len() {
         if entropy && bytes[at] != 0xff {
             at += 1;
@@ -110,6 +181,7 @@ fn preflight(bytes: &[u8]) -> Result<Validated> {
                 shape: dimensions.ok_or("JPEG missing SOF0")?,
                 components,
                 sampling,
+                orientation: orientation.unwrap_or(1),
             });
         }
         if entropy {
@@ -145,7 +217,20 @@ fn preflight(bytes: &[u8]) -> Result<Validated> {
                 jfif = true;
             }
             0xfe => ancillary += length, // COM opaque; never authority or expanded text.
-            0xe1..=0xef => return Err("JPEG APP metadata unsupported (EXIF/orientation/ICC/Adobe/custom/multiframe); raw retained".into()),
+            0xe1..=0xef => {
+                ancillary += length;
+                if code == 0xe1 && data.starts_with(b"Exif\0\0") {
+                    if orientation.is_some(){return Err("JPEG duplicate EXIF segment".into());}
+                    orientation=Some(exif_orientation(data)?);
+                }
+                if (code == 0xe2 && data.starts_with(b"ICC_PROFILE\0"))
+                    || (code == 0xee && data.starts_with(b"Adobe"))
+                {
+                    return Err("JPEG rendering metadata requires orientation/color handling; raw retained".into());
+                }
+                // Opaque APP payloads (including XMP/C2PA) are bounded data,
+                // never links, executable instructions or rendering authority.
+            },
             0xc0 => {
                 if dimensions.is_some() || data.len() < 6 || data[0] != 8 {
                     return Err("JPEG requires one 8-bit baseline SOF0".into());
@@ -374,13 +459,34 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Texture> {
     let mut rgba = Vec::new();
     rgba.try_reserve_exact(frame.shape.rgba)
         .map_err(|_| "JPEG caller RGBA allocation refused")?;
-    if frame.components == 1 {
-        for &gray in &samples {
-            rgba.extend_from_slice(&[gray, gray, gray, 255]);
-        }
+    let (width, height) = if frame.orientation >= 5 {
+        (frame.shape.height, frame.shape.width)
     } else {
-        for rgb in samples.as_chunks::<3>().0.iter() {
-            rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+        (frame.shape.width, frame.shape.height)
+    };
+    // Write oriented RGBA straight from decoder samples. No second RGBA buffer
+    // or unbudgeted rotation allocation; sample and output budgets are unchanged.
+    let (w, h) = (frame.shape.width as usize, frame.shape.height as usize);
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let (sx, sy) = match frame.orientation {
+                1 => (x, y),
+                2 => (w - 1 - x, y),
+                3 => (w - 1 - x, h - 1 - y),
+                4 => (x, h - 1 - y),
+                5 => (y, x),
+                6 => (y, h - 1 - x),
+                7 => (w - 1 - y, h - 1 - x),
+                8 => (w - 1 - y, x),
+                _ => return Err("JPEG unvalidated orientation".into()),
+            };
+            let at = (sy * w + sx) * frame.components;
+            if frame.components == 1 {
+                let gray = samples[at];
+                rgba.extend_from_slice(&[gray, gray, gray, 255]);
+            } else {
+                rgba.extend_from_slice(&[samples[at], samples[at + 1], samples[at + 2], 255]);
+            }
         }
     }
     drop(samples);
@@ -392,8 +498,8 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Texture> {
     // Alpha255 is standard gray/RGB conversion, not proof of entropy completion.
     // The reviewed strict fork, not opacity, supplies the bit/marker contract.
     Ok(Texture {
-        width: frame.shape.width,
-        height: frame.shape.height,
+        width,
+        height,
         rgba,
     })
 }
@@ -426,10 +532,117 @@ mod tests {
         assert!(shape(1025, 1).is_err() && shape(0, 1).is_err());
     }
     #[test]
+    fn exif_orientation_six_rotates_actual_pixels_and_one_preserves_them() {
+        let exif = |orientation: u16| {
+            let mut data = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0".to_vec();
+            data.extend_from_slice(&[0x12, 0x01, 3, 0, 1, 0, 0, 0]);
+            data.extend_from_slice(&orientation.to_le_bytes());
+            data.extend_from_slice(&[0; 6]);
+            data
+        };
+        let plain = decode(JPEG).unwrap();
+        let one = decode(&insert(0xe1, &exif(1))).unwrap();
+        assert_eq!(one.rgba, plain.rgba);
+        let rotated = decode(&insert(0xe1, &exif(6))).unwrap();
+        assert_eq!([rotated.width, rotated.height], [64, 96]);
+        for (x, y) in [(12, 8), (82, 8), (12, 52), (82, 52)] {
+            let original = (y * 96 + x) * 4;
+            let target = (x * 64 + (63 - y)) * 4;
+            assert_eq!(
+                rotated.rgba[target..target + 4],
+                plain.rgba[original..original + 4]
+            );
+        }
+        assert!(decode(&insert(0xe1, &exif(9))).is_err());
+        assert!(decode(&insert(0xe1, b"Exif\0\0II")).is_err());
+    }
+    #[test]
+    fn all_exif_orientations_and_endian_orders_use_correct_corner_pixels() {
+        let plain = decode(JPEG).unwrap();
+        let source_corners =
+            [0, 95, 63 * 96, 64 * 96 - 1].map(|i| plain.rgba[i * 4..i * 4 + 4].to_vec());
+        let permutations = [
+            [0, 1, 2, 3],
+            [1, 0, 3, 2],
+            [3, 2, 1, 0],
+            [2, 3, 0, 1],
+            [0, 2, 1, 3],
+            [2, 0, 3, 1],
+            [3, 1, 2, 0],
+            [1, 3, 0, 2],
+        ];
+        for little in [false, true] {
+            for (index, expected) in permutations.iter().enumerate() {
+                let mut data = b"Exif\0\0".to_vec();
+                let shorts = |n: u16| {
+                    if little {
+                        n.to_le_bytes()
+                    } else {
+                        n.to_be_bytes()
+                    }
+                };
+                let longs = |n: u32| {
+                    if little {
+                        n.to_le_bytes()
+                    } else {
+                        n.to_be_bytes()
+                    }
+                };
+                data.extend_from_slice(if little { b"II" } else { b"MM" });
+                data.extend_from_slice(&shorts(42));
+                data.extend_from_slice(&longs(8));
+                data.extend_from_slice(&shorts(1));
+                data.extend_from_slice(&shorts(0x0112));
+                data.extend_from_slice(&shorts(3));
+                data.extend_from_slice(&longs(1));
+                data.extend_from_slice(&shorts(index as u16 + 1));
+                data.extend_from_slice(&[0; 6]);
+                let actual = decode(&insert(0xe1, &data)).unwrap();
+                let (w, h) = if index >= 4 { (64, 96) } else { (96, 64) };
+                assert_eq!((actual.width, actual.height), (w, h));
+                for (target, original) in
+                    [0, w - 1, (h - 1) * w, h * w - 1].into_iter().zip(expected)
+                {
+                    let at = target as usize * 4;
+                    assert_eq!(
+                        &actual.rgba[at..at + 4],
+                        source_corners[*original],
+                        "orientation {} endian {little}",
+                        index + 1
+                    );
+                }
+                for n in 6..data.len() {
+                    assert!(exif_orientation(&data[..n]).is_err());
+                }
+            }
+        }
+    }
+    #[test]
+    fn opaque_app_metadata_decodes_without_changing_pixels() {
+        let expected = decode(JPEG).unwrap();
+        for code in [0xe1, 0xe2, 0xe3, 0xeb, 0xef] {
+            let actual = decode(&insert(code, b"bounded opaque provenance metadata")).unwrap();
+            assert_eq!(actual.rgba, expected.rgba, "APP marker {code:x}");
+        }
+        let mut over = JPEG.to_vec();
+        for _ in 0..3 {
+            let mut next = over[..2].to_vec();
+            next.extend_from_slice(&[255, 235, 255, 255]);
+            next.extend_from_slice(&vec![0; 65533]);
+            next.extend_from_slice(&over[2..]);
+            over = next;
+        }
+        assert!(decode(&over).unwrap_err().contains("ancillary"));
+    }
+    #[test]
     fn metadata_profiles_and_dimension_precision_refused_before_decoder() {
-        for code in 0xe1..=0xef {
-            assert!(preflight(&insert(code, b"metadata")).is_err());
-            assert!(decode(&insert(code, b"metadata")).is_err());
+        for (code, metadata) in [
+            (0xe1, b"Exif\0\0".as_slice()),
+            (0xe2, b"ICC_PROFILE\0".as_slice()),
+            (0xee, b"Adobe".as_slice()),
+        ] {
+            assert!(preflight(&insert(code, metadata)).is_err());
+            assert!(decode(&insert(code, metadata)).is_err());
         }
         for (offset, value) in [(1, 0xc2), (4, 12), (9, 4)] {
             let mut bad = JPEG.to_vec();
@@ -587,6 +800,7 @@ mod tests {
         // Ceil/padded odd 4:2:0 case: MX=MY=2, P=1536, R=1536, L=102.
         let odd = Validated {
             shape: shape(17, 19).unwrap(),
+            orientation: 1,
             components: 3,
             sampling: [
                 Sampling { h: 2, v: 2 },
@@ -601,6 +815,7 @@ mod tests {
         for components in [1, 3] {
             let largest = Validated {
                 shape: shape(1024, 1024).unwrap(),
+                orientation: 1,
                 components,
                 sampling: [Sampling { h: 1, v: 1 }; 3],
             };

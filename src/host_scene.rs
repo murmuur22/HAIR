@@ -6,6 +6,11 @@ use std::{
     path::Path,
 };
 
+// The slab is centered on logical floor zero. Decoration art and placement rays
+// use its visible top; persisted logical envelopes retain their historic y=0.
+pub const FLOOR_THICKNESS: f32 = 0.1;
+pub const FLOOR_TOP: f32 = FLOOR_THICKNESS * 0.5;
+
 #[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Anchor {
@@ -39,6 +44,11 @@ pub struct WallAperture {
     pub width: f32,
     pub height: f32,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedItem {
+    pub position: crate::placement_store::Position,
+    pub bounds: Geometry,
+}
 #[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostScene {
@@ -60,6 +70,16 @@ pub struct HostScene {
     /// Doorway basis metadata and floor-edge movement bounds remain authoritative.
     #[serde(default)]
     pub open_platform: bool,
+    /// Runtime-only preferences reconciled against a held immediate directory.
+    /// Authored host TOML cannot provide file identity or placements.
+    #[serde(skip)]
+    pub file_placements: std::collections::BTreeMap<String, PlacedItem>,
+    /// Exact runtime file bindings; authored TOML cannot make furniture non-solid.
+    #[serde(skip)]
+    pub file_anchors: HashSet<String>,
+    /// Runtime decoration ownership; never a file binding or listing slot.
+    #[serde(skip)]
+    pub decorations: std::collections::BTreeMap<String, crate::placement_store::Decoration>,
 }
 /// Proper door-local rotation: tangent X, up Y, inward +Z. Only the host
 /// chooses this basis; asset-local yaw/pivot/fit happen before placement.
@@ -367,6 +387,38 @@ impl HostScene {
             .find(|a| a.role == role)
             .expect("validated required host anchor")
     }
+    pub fn target_anchor(&self, a: &Anchor) -> Anchor {
+        let mut target = a.clone();
+        if let Some(p) = self.file_placements.get(&a.id)
+            && let Ok(b) = p.position.file_bounds() {
+            target.at = b.at;
+            target.size = b.size;
+        }
+        target
+    }
+    /// Explicitly enabled placement bases only. Unplaced listing envelopes keep
+    /// their document-role visuals but never acquire collision ownership.
+    pub fn file_bases(&self) -> Vec<(String, Geometry)> {
+        self.anchors.iter().filter(|a| self.file_anchors.contains(&a.id)).filter_map(|a| {
+            let p = self.file_placements.get(&a.id)?;
+            p.position.base_bounds().ok().flatten().map(|g| (a.id.clone(), g))
+        }).collect()
+    }
+    pub fn solid_file_bases(&self) -> Vec<Geometry> {
+        self.file_bases().into_iter().filter(|(id, _)| self.file_placements.get(id)
+            .is_some_and(|p| p.position.properties.base_collision)).map(|(_, g)| g).collect()
+    }
+    /// Visibility/overlap envelopes, shared with runtime aim. Collision OFF
+    /// permits walking through decor, not looking through its visible volume.
+    pub fn decoration_bounds(&self) -> impl Iterator<Item = Geometry> + '_ {
+        self.decorations.values().filter_map(|d| d.bounds().ok())
+    }
+    pub fn solid_decorations(&self) -> impl Iterator<Item = Geometry> + '_ {
+        self.decorations.values().filter(|d| d.collision).filter_map(|d| d.bounds().ok())
+    }
+    /// Generated/saved files match the player's non-solid target policy,
+    /// regardless of overlap preference. Authored envelopes retain their legacy
+    /// conservative navigation bounds; placement admission has separate checks.
     pub fn blocked(&self, p: [f32; 2]) -> bool {
         p.iter().any(|v| !v.is_finite())
             || p[0] < self.room[0]
@@ -376,12 +428,17 @@ impl HostScene {
             || self
                 .anchors
                 .iter()
-                .filter(|a| matches!(a.role.as_str(), "document" | "decoration"))
+                .filter(|a| {
+                    matches!(a.role.as_str(), "document" | "decoration")
+                        && !self.file_anchors.contains(&a.id)
+                })
                 .any(|a| inside(p, rect(a.at, a.size, 0.22)))
             || self
                 .geometry
                 .iter()
                 .any(|g| inside(p, rect(g.at, g.size, 0.22)))
+            || self.solid_file_bases().iter().any(|g| inside(p, rect(g.at, g.size, 0.22)))
+            || self.solid_decorations().any(|g| inside(p, rect(g.at, g.size, 0.22)))
     }
     fn check_connections(&self) -> Result<()> {
         self.check_routes(&[])
@@ -396,6 +453,7 @@ impl HostScene {
             .anchors
             .iter()
             .filter(|a| matches!(a.role.as_str(), "document" | "portal"))
+            .map(|a| self.target_anchor(a))
             .collect();
         let walls = self.walls();
         let mut reached = vec![false; goals.len()];
@@ -410,7 +468,7 @@ impl HostScene {
             ];
             for (i, a) in goals.iter().enumerate() {
                 if (p[0] - a.at[0]).hypot(p[1] - a.at[2]) < 1.4 {
-                    let eye = glam::Vec3::new(p[0], 1.65, p[1]);
+                    let eye = glam::Vec3::new(p[0], crate::player::eye_offset(self), p[1]);
                     let centre = glam::Vec3::from_array(a.at) + glam::Vec3::Y * a.size[1] * 0.5;
                     if self.version == 1
                         || !(self
@@ -421,12 +479,18 @@ impl HostScene {
                             .any(|g| {
                                 crate::interaction::segment_hits_box(eye, centre, g.at, g.size)
                             })
+                            // Sight uses the same envelopes and segment policy
+                            // as runtime aim; only blocked() filters for solidity.
+                            || self.decoration_bounds().any(|g| {
+                                crate::interaction::segment_hits_box(eye, centre, g.at, g.size)
+                            })
                             || self
                                 .anchors
                                 .iter()
                                 .filter(|b| {
                                     b.id != a.id
                                         && matches!(b.role.as_str(), "document" | "decoration")
+                                        && !self.file_placements.contains_key(&b.id)
                                 })
                                 .any(|b| {
                                     crate::interaction::segment_hits_box(eye, centre, b.at, b.size)
@@ -584,7 +648,7 @@ impl HostScene {
         crate::scene::cuboid(
             &mut out,
             [(x0 + x1) * 0.5, 0.0, (z0 + z1) * 0.5],
-            [x1 - x0 + 0.4, 0.1, z1 - z0 + 0.4],
+            [x1 - x0 + 0.4, FLOOR_THICKNESS, z1 - z0 + 0.4],
             [0.22, 0.24, 0.21],
         );
         for g in self.walls() {
@@ -625,6 +689,9 @@ fn inside(p: [f32; 2], b: [f32; 4]) -> bool {
 fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
 }
+#[cfg(test)]
+#[path = "host_scene_r9_tests.rs"]
+mod r9_tests;
 #[cfg(test)]
 mod generated_profile_contract {
     use super::*;

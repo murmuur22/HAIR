@@ -57,6 +57,8 @@ fn aimed_section_object_opens_only_its_bound_content() {
         .clone();
     let anchor = g.host.anchors.iter().find(|a| a.id == key).unwrap().clone();
     let pose = hair::Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0], anchor.at[2] + 1.2],
         yaw: 0.0,
         pitch: -0.5,

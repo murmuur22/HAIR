@@ -19,6 +19,48 @@ impl Drop for Fixture {
     }
 }
 #[test]
+fn actual_inventory_capture_admits_sparse_ui_but_not_uniform_frames() {
+    let fixture = Fixture::new("inventory-palette");
+    let output = fixture.output();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let world = crate::World::load(root).unwrap();
+    let instance = instance();
+    let adapter = pollster::block_on(adapter(&instance, None)).unwrap();
+    let theme = crate::theme::Theme::load(&root.join("packs/office.toml"), &mut Default::default())
+        .unwrap();
+    let mut renderer = pollster::block_on(Renderer::new(
+        &adapter,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        [640, 480],
+        &theme.vertices_for(&world),
+    ))
+    .unwrap();
+    renderer.inventory_overlay = Some(crate::inventory_ui::overlay(&[], 0, 0.0, [640, 480]));
+    renderer
+        .capture(&output, "office.png", &crate::Pose::default(), &world)
+        .expect("sparse empty-inventory UI is a valid render, not a flat scene");
+    let mut painter = crate::text::Painter {
+        vertices: vec![],
+        width: 640.0,
+        height: 480.0,
+    };
+    painter.rect(0.0, 0.0, 640.0, 480.0, [0.02, 0.05, 0.03]);
+    renderer.inventory_overlay = Some(painter.vertices);
+    assert!(
+        renderer
+            .capture(
+                &output,
+                "reader-welcome.png",
+                &crate::Pose::default(),
+                &world
+            )
+            .unwrap_err()
+            .contains("flat"),
+        "inventory must not exempt a uniform framebuffer"
+    );
+    assert!(!output.path().join("reader-welcome.png").exists());
+}
+#[test]
 fn late_regular_file_is_not_truncated_at_capture_consumer() {
     let f = Fixture::new("late-file");
     let output = f.output(); // successful preflight BEFORE the competing write

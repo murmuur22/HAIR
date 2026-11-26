@@ -56,6 +56,7 @@ pub struct Texture {
     pub height: u32,
     pub rgba: Vec<u8>,
 }
+#[derive(Clone)]
 pub struct Model {
     pub vertices: Vec<Vertex>,
     pub textures: Vec<std::sync::Arc<Texture>>,

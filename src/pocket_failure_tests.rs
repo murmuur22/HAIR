@@ -41,6 +41,8 @@ fn failed_journey_updates_the_aimed_portal_but_allows_retry_and_return() {
         .find(|h| h.id == door)
         .unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [anchor.at[0] + 0.4, -2.7],
         yaw: 0.0,
         pitch: -0.2,

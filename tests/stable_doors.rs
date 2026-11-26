@@ -93,6 +93,8 @@ fn reordering_and_reinsertion_restore_exact_geometry_and_every_door_is_reachable
         let a = full.host.anchors.iter().find(|a| a.id == d.anchor).unwrap();
         let n = full.host.portal_inward(&d.anchor);
         let pose = hair::Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0] + n[0], a.at[2] + n[1]],
             yaw: (-n[0]).atan2(n[1]),
             pitch: -0.2,

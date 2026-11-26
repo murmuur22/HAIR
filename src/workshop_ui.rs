@@ -1,21 +1,27 @@
 use super::{Command, DialogKind, Workshop};
 
 impl Workshop {
-    fn button(&mut self, ui: &mut egui::Ui, id: &'static str, label: &str) -> bool {
+    pub(super) fn button(&mut self, ui: &mut egui::Ui, id: &'static str, label: &str) -> bool {
         let response = ui
             .push_id(id, |ui| {
                 ui.add(egui::Button::new(label).wrap_mode(egui::TextWrapMode::Extend))
             })
             .inner;
         self.controls.insert(id, response.rect);
-        response.clicked()
+        response.clicked() && !self.input_rearm && self.dialog.is_none() && (!self.confirmation_pending() || matches!(id, "cancel-discard" | "confirm-discard" | "ack-error"))
     }
     pub fn ui(&mut self, root: &mut egui::Ui, preview: Option<egui::TextureId>) {
         let ctx = root.ctx().clone();
+        let popup_was_open = egui::Popup::is_any_open(&ctx);
+        // Re-enable hit testing on the neutral frame itself, so the next fresh
+        // press sees enabled widgets. Held/release events cannot rearm a panel.
+        if self.input_rearm && ctx.input(|i| !i.pointer.any_down() && !i.key_down(egui::Key::Enter) && !i.key_down(egui::Key::Space) && !i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { .. } | egui::Event::Key { .. }))) {
+            self.input_rearm = false;
+        }
         self.controls.clear();
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        if escape {
-            if self.camera.captured || self.keyboard_was_editing || ctx.egui_wants_keyboard_input()
+        if escape && self.dialog.is_none() {
+            if self.camera.captured || self.keyboard_was_editing || ctx.egui_wants_keyboard_input() || popup_was_open
             {
                 self.camera.release();
             } else if self.confirmation_pending() {
@@ -25,7 +31,7 @@ impl Workshop {
             }
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
-        if let Some(path) = dropped {
+        if let Some(path) = dropped.filter(|_| self.dialog.is_none() && !self.confirmation_pending() && !self.input_rearm) {
             self.camera.release();
             self.input_path = path.display().to_string();
             self.dispatch(Command::Import);
@@ -74,6 +80,7 @@ impl Workshop {
         });
         let panel_width = 380.0_f32.min((root.available_width() - 20.0).max(1.0));
         egui::Panel::left("workshop-controls").exact_size(panel_width).show(root, |ui| {
+            if self.dialog.is_some() || self.confirmation_pending() || self.input_rearm { ui.disable(); }
             let authoring=egui::ScrollArea::vertical().id_salt("authoring-scroll").show(ui, |ui| {
                 ui.heading("Project");
                 ui.horizontal_wrapped(|ui| {
@@ -87,14 +94,15 @@ impl Workshop {
                 ui.small("Save and Export use separate NEW folders under an existing parent. Export does not save edits.");
                 ui.separator();
                 let columns=if ui.available_width()<330.0 {2}else{3};
-                for row in [("document","Document object"),("decoration","Decoration"),("door-trim","Door trim"),("wall","Wall"),("floor","Floor")].chunks(columns) {
+                for row in [("document","Document base"),("decoration","Decoration"),("door-trim","Door trim"),("wall","Wall"),("floor","Floor"),("sky","Sky"),("catalog","Place Mode Catalog")].chunks(columns) {
                 ui.horizontal(|ui| {
                     for &(id,label) in row {
                         let r=ui.push_id(id,|ui|ui.add(egui::Button::new(label).selected(self.category==id).wrap_mode(egui::TextWrapMode::Extend))).inner;
                         self.controls.insert(id,r.rect);
-                        if r.clicked() && self.dialog.is_none() && !self.confirmation_pending() {
+                        if r.clicked() && !self.input_rearm && self.dialog.is_none() && !self.confirmation_pending() {
                             self.camera.release();
                             self.category=id;
+                            self.view_revision+=1;
                             if let Some(p)=self.project.as_mut() {
                                 let result=match id { "document"=>p.select_model(true),"decoration"=>p.select_model(false),"door-trim"=>p.select_door(),_=>Ok(()) };
                                 if let Err(e)=result {self.error=Some(e);}
@@ -103,9 +111,13 @@ impl Workshop {
                     }
                 });
                 }
-                let label=match self.category {"document"=>"Document object","decoration"=>"Decoration","door-trim"=>"Door trim","wall"=>"Wall",_=>"Floor"};
+                let label=match self.category {"document"=>"Document object base","decoration"=>"Decoration","door-trim"=>"Door trim","wall"=>"Wall","sky"=>"Sky","catalog"=>"Place Mode Catalog",_=>"Floor"};
                 let r=ui.heading(format!("Editing: {label}")); self.controls.insert("editor-heading",r.rect);
-                if matches!(self.category,"wall"|"floor") {
+                if self.category=="sky" {
+                    self.sky_ui(ui);
+                } else if self.category=="catalog" {
+                    self.catalog_ui(ui);
+                } else if matches!(self.category,"wall"|"floor") {
                     let surface=self.category;
                     let (id,kind)=if surface=="wall" {("wall-png",DialogKind::WallTexture)}else{("floor-png",DialogKind::FloorTexture)};
                     if self.button(ui,id,&format!("Import {label} PNG…")) {
@@ -132,6 +144,11 @@ impl Workshop {
                     if let Some(p)=&self.project {
                         ui.label(format!("Loaded: {}",p.source().file_name().unwrap_or_default().to_string_lossy()));
                     }
+                    if self.category=="document" {
+                        ui.label("Document-object base art (shared legacy document role). Also supplies document-anchor art outside placed file assemblies. Floating file bodies use built-in class art or supported content previews, not this GLB.");
+                        ui.small("Base presence and collision are Place Mode layout choices, not theme controls. No independent base-only or file-body authoring is available; file bodies stay non-solid.");
+                    }
+                    if self.category=="decoration" {ui.small("Legacy host Decoration role, not the placeable choices in Place Mode Catalog.");}
                     let door=self.category=="door-trim";
                     if door {ui.label("Door trim fits a fixed host opening. Whole-frame resize, scale, yaw and pivot editing are unsupported for this limited trim role. Use the supplied frame template; the doorway must stay clear.");}
                     let edit=self.project.as_ref().map(|p|p.edit());
@@ -153,7 +170,7 @@ impl Workshop {
                 ui.separator();
                 let advanced = egui::CollapsingHeader::new("Advanced full paths (optional)")
                     .default_open(false).show(ui, |ui| {
-                        ui.label(if matches!(self.category,"wall"|"floor") {"PNG full path:"}else{"GLB full path:"});
+                        ui.label(if matches!(self.category,"wall"|"floor"|"sky") {"PNG full path:"}else{"GLB full path:"});
                         let r = ui.add(egui::TextEdit::singleline(&mut self.input_path).id(egui::Id::unique("import-path")).desired_width(f32::INFINITY));
                         self.controls.insert("import-path", r.rect);
                         if self.button(ui, "import-path-action", "Import typed path") { self.dispatch(Command::Import); }
@@ -172,7 +189,8 @@ impl Workshop {
             self.controls.insert("authoring-viewport",authoring.inner_rect);
         });
         egui::CentralPanel::default().show(root, |ui| {
-            ui.heading("Fixed host preview stage (not exported)");
+            if self.dialog.is_some() || self.confirmation_pending() || self.input_rearm { ui.disable(); }
+            ui.heading(if self.category=="catalog" {"Selected catalog mesh — transient inspection (not exported)"} else {"Fixed host preview stage (not exported)"});
             let mode = if self.camera.free_fly { "Free-fly: click preview to capture" } else { "Standard inspection (UI controls)" };
             if self.button(ui, "camera-mode", mode) {
                 self.frame_camera();
@@ -212,6 +230,9 @@ impl Workshop {
         self.keyboard_was_editing = ctx.text_edit_focused();
         // Same egui-winit event stream in native and synthetic renderer frames.
         let blocked = self.dialog.is_some()
+            || self.input_rearm
+            || popup_was_open
+            || egui::Popup::is_any_open(&ctx)
             || self.confirmation_pending()
             || self.should_close
             || ctx.egui_wants_keyboard_input()
@@ -251,5 +272,6 @@ impl Workshop {
                 self.camera.step(ctx.input(|i| i.unstable_dt));
             }
         }
+
     }
 }

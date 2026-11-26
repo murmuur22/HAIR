@@ -10,6 +10,8 @@ fn aim_current_portal(app: &mut App, id: &str) {
         .expect("current portal");
     let n = host.portal_inward(id);
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [a.at[0] + 1.05 * n[0], a.at[2] + 1.05 * n[1]],
         yaw: (-n[0]).atan2(n[1]),
         pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / 1.05).atan(),

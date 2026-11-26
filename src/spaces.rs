@@ -44,6 +44,8 @@ pub struct Arrival {
 impl Arrival {
     pub fn pose(&self) -> Pose {
         Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: self.at,
             yaw: self.yaw_degrees.to_radians(),
             pitch: self.pitch_degrees.to_radians(),
@@ -122,7 +124,9 @@ impl Spaces {
         if s.scene.blocked(a.at) {
             return Err("arrival blocked".into());
         }
-        Ok((s, a.pose()))
+        let mut pose = a.pose();
+        crate::player::fit_camera(&s.scene, &mut pose);
+        Ok((s, pose))
     }
     pub fn validate(&self, site: &Site) -> Result<()> {
         if self.version != 2

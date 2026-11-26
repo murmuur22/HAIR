@@ -133,6 +133,8 @@ fn prepare_generated(
         let inward = host.portal_inward(&anchor.id);
         // The same doorway-local clearance policy used by folder arrivals, not a world Z offset.
         let pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [
                 anchor.at[0] + inward[0] * 1.05,
                 anchor.at[2] + inward[1] * 1.05,
@@ -258,6 +260,13 @@ pub(super) struct Runtime {
     pub refresh_held: bool,
 }
 impl Runtime {
+    pub(super) fn back_room_id(&self) -> Option<hair::exploration::RoomId> {
+        let world = &self.history.last()?.world;
+        Some(hair::exploration::RoomId::new(
+            &world.current,
+            world.pocket.as_ref()?.room.map_or(0, |r| r.0),
+        ))
+    }
     pub fn new(doors: Vec<Door>, fetcher: Fetcher) -> Self {
         Self {
             doors,
@@ -267,7 +276,7 @@ impl Runtime {
             generation: 0,
             history: Vec::new(),
             pending: None,
-            status: "R return | F5 refresh | Tab/E links | T pack".into(),
+            status: "R return | F5 refresh | Tab/E links | pack in Settings".into(),
             fetcher,
             back_held: false,
             refresh_held: false,
@@ -736,10 +745,9 @@ impl App {
         {
             history.push(previous.clone());
         }
-        if j.mode != Mode::Initial {
-            // The navigation panel's M state is a visitor preference, not page data.
-            self.world.tree_collapsed = old.world.tree_collapsed;
-        }
+        // Player Settings owns this visitor preference, including the saved value
+        // restored before an initial --url/address-bar acquisition starts.
+        self.world.tree_collapsed = old.world.tree_collapsed;
         let old_visited = old.world.pocket.as_ref().map(|p| p.visited.as_slice());
         if let Some(pocket) = &mut self.world.pocket {
             pocket.previous = previous;
@@ -764,8 +772,10 @@ impl App {
         // Continuation drops the preceding scene/materials instead of pushing page history.
         if let Some(arrival) = &continuation {
             self.pose = arrival.pose;
+            self.player = Default::default();
         } else if j.mode != Mode::Refresh || source_reset || refresh_relocated {
             self.themes[self.theme_index].respawn(&mut self.pose);
+            self.player = Default::default();
         }
         if refresh_relocated {
             self.world.explicit_target = None;
@@ -795,7 +805,7 @@ impl App {
                 "{removed_selections} selected destination(s) removed; recovered to first surviving target where available; R return | F5 refresh"
             )
         } else {
-            "R return | F5 refresh | Tab/Shift+Tab doorway destinations | T pack".into()
+            "R return | F5 refresh | Tab/Shift+Tab doorway destinations | pack in Settings".into()
         };
         if selected_door_moved {
             web.status = format!("Selected door moved; aim again | {}", web.status);
@@ -834,6 +844,9 @@ impl App {
         Ok(())
     }
     pub(super) fn return_web(&mut self) -> Result<()> {
+        self.return_web_with_door(false)
+    }
+    fn return_web_with_door(&mut self, through_door: bool) -> Result<()> {
         let web = self.web.as_mut().ok_or("not web mode")?;
         let continuation_pending = web
             .pending
@@ -859,6 +872,37 @@ impl App {
             };
             return Ok(());
         };
+        // Physical return emerges at the matching held departure doorway. R keeps
+        // the exact snapshot pose. Compute only from held host/bindings, never URLs
+        // interpreted as ancestry or a freshly fetched/rebuilt room.
+        let doorway_pose = through_door.then(|| {
+            let theme = &s.themes[self.theme_index];
+            if let Some(door) = s.doors.iter().find(|d| d.resource == self.world.current)
+                && let Some(anchor) = theme.host.anchors.iter().find(|a| a.id == door.anchor)
+            {
+                let n = theme.host.portal_inward(&anchor.id);
+                for distance in [1.05, 0.8, 1.3, 1.6, 2.0] {
+                    let position = [
+                        anchor.at[0] + n[0] * distance,
+                        anchor.at[2] + n[1] * distance,
+                    ];
+                    if !theme.host.blocked(position) {
+                        return Pose {
+                            eye_offset: 1.65,
+                            feet_y: 0.0,
+                            position,
+                            yaw: n[0].atan2(-n[1]),
+                            pitch: -0.1,
+                        };
+                    }
+                }
+            }
+            // Address-bar arrivals need not have an outgoing door in the held page.
+            // Keep its geometry; use its validated entry instead of inventing a port.
+            let mut entry = s.pose;
+            theme.respawn(&mut entry);
+            entry
+        });
         if let Some(r) = &mut self.renderer
             && let Err(e) = r.set_theme_appearance(&s.themes[self.theme_index])
         {
@@ -881,7 +925,20 @@ impl App {
             pocket.visited = merge_visited(&pocket.visited, &visited);
         }
         self.themes = s.themes;
-        self.pose = s.pose;
+        self.pose = doorway_pose.unwrap_or(s.pose);
+        self.player = hair::player::Player {
+            height: self.pose.feet_y,
+            velocity: 0.0,
+            grounded: self.pose.feet_y == 0.0,
+        };
+        if through_door {
+            self.world.explicit_target = None;
+            hair::interaction::refresh(
+                &self.themes[self.theme_index].host,
+                &self.pose,
+                &mut self.world,
+            );
+        }
         self.scroll = s.scroll;
         // The restored row is exact; a remainder from the left page is not.
         self.wheel_rows = 0.0;
@@ -945,7 +1002,7 @@ impl App {
             return Ok(());
         }
         if t.anchor == "return-history" {
-            return self.return_web();
+            return self.return_web_with_door(true);
         }
         if let Some(action) = self.web.as_ref().and_then(|web| {
             web.window_doors

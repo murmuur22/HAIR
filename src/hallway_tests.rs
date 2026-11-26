@@ -4,6 +4,8 @@ use super::*;
 fn sparse_diagnostic(a: &mut App, base: &Path) {
     let saved = a.pose;
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, -4.9],
         yaw: std::f32::consts::PI,
         pitch: -0.15,

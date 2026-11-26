@@ -47,6 +47,8 @@ fn native_e_reads_each_section_and_refresh_preserves_binding() {
             .unwrap()
             .clone();
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [anchor.at[0], anchor.at[2] + 1.2],
             yaw: 0.0,
             pitch: -0.5,
@@ -132,6 +134,8 @@ fn pocket_objects_and_readers_render_at_normal_and_small_sizes() {
             a.renderer = Some(renderer);
         });
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [0.0, 3.0],
             yaw: 0.0,
             pitch: -0.25,
@@ -164,6 +168,8 @@ fn pocket_objects_and_readers_render_at_normal_and_small_sizes() {
                 .find(|h| h.id == key)
                 .unwrap();
             a.pose = Pose {
+                eye_offset: 1.65,
+                feet_y: 0.0,
                 position: [anchor.at[0], anchor.at[2] + 1.2],
                 yaw: 0.0,
                 pitch: -0.5,
@@ -207,6 +213,8 @@ fn pocket_objects_and_readers_render_at_normal_and_small_sizes() {
             .find(|h| h.id == door)
             .unwrap();
         a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [anchor.at[0] + 0.4, -2.7],
             yaw: 0.0,
             pitch: -0.5,

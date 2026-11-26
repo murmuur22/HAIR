@@ -165,6 +165,8 @@ fn side_continuation_arrives_inside_reciprocal_and_turns_back() {
         .unwrap()
         .clone();
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [next.at[0] - 1.05, next.at[2]],
         yaw: std::f32::consts::FRAC_PI_2,
         pitch: ((1.0_f32 - 1.65) / 1.05).atan(),
@@ -249,6 +251,8 @@ fn entering_child_arrives_just_inside_rear_parent_facing_front() {
         .unwrap()
         .clone();
     app.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [child.at[0], child.at[2] + 1.05],
         yaw: 0.0,
         pitch: ((1.0_f32 - 1.65) / 1.05).atan(),

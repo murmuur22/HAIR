@@ -4,6 +4,8 @@ use super::*;
 
 fn facing_rear(at: [f32; 3]) -> Pose {
     Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [at[0], 3.0],
         yaw: std::f32::consts::PI,
         pitch: -0.4,
@@ -16,6 +18,125 @@ fn target(a: &App) -> Option<hair::interaction::Target> {
         &a.world,
         &a.web.as_ref().unwrap().window_doors,
     )
+}
+
+#[test]
+fn physical_return_emerges_from_matching_door_facing_inward_but_r_keeps_saved_view() {
+    fn dense(address: Address, _: &hair::acquisition::Cancellation, _: Instant) -> Result<Page> {
+        let html = (0..64)
+            .map(|i| format!("<a href='/child-{i}'>Child {i}</a>"))
+            .collect::<String>();
+        Page::html(address, html.as_bytes())
+    }
+    let mut a = app();
+    a.web.as_mut().unwrap().fetcher = dense;
+    a.request_web("https://example.org/dense-return", web_native::Mode::Follow)
+        .unwrap();
+    finish(&mut a);
+    let original = a.world.current.clone();
+    let original_bounds = a.themes[0].host.room;
+    let mut directions = std::collections::HashSet::new();
+    let cases: Vec<_> = a
+        .web
+        .as_ref()
+        .unwrap()
+        .doors
+        .iter()
+        .filter_map(|d| {
+            let host = &a.themes[0].host;
+            let n = host.portal_inward(&d.anchor);
+            directions.insert([n[0] as i32, n[1] as i32]).then(|| {
+                let anchor = host
+                    .anchors
+                    .iter()
+                    .find(|anchor| anchor.id == d.anchor)
+                    .unwrap();
+                (
+                    d.resource.clone(),
+                    d.anchor.clone(),
+                    anchor.at,
+                    anchor.size,
+                    n,
+                )
+            })
+        })
+        .collect();
+    assert_eq!(
+        cases.len(),
+        4,
+        "valid doorway fixture covers front, rear and both side walls"
+    );
+    for (destination, id, at, size, n) in cases {
+        a.web.as_mut().unwrap().fetcher = dense;
+        a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
+            position: [at[0] + n[0] * 1.05, at[2] + n[1] * 1.05],
+            yaw: (-n[0]).atan2(n[1]),
+            pitch: ((at[1] + size[1] * 0.5 - 1.65) / 1.05).atan(),
+        };
+        a.world.explicit_target = None;
+        assert!(!a.themes[0].host.blocked(a.pose.position));
+        assert_eq!(
+            target(&a).unwrap().anchor,
+            id,
+            "actually aim at departure door"
+        );
+        a.key(KeyCode::KeyE, true, false).unwrap();
+        a.key(KeyCode::KeyE, false, false).unwrap();
+        finish(&mut a);
+        assert_eq!(a.world.current, destination);
+        a.web.as_mut().unwrap().fetcher = |_, _, _| panic!("return must not refetch held page");
+        let rear = a.themes[0]
+            .host
+            .anchors
+            .iter()
+            .find(|door| door.id == "return-history")
+            .unwrap();
+        let r = a.themes[0].host.portal_inward(&rear.id);
+        a.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
+            position: [rear.at[0] + r[0] * 1.05, rear.at[2] + r[1] * 1.05],
+            yaw: (-r[0]).atan2(r[1]),
+            pitch: ((rear.at[1] + rear.size[1] * 0.5 - 1.65) / 1.05).atan(),
+        };
+        assert_eq!(target(&a).unwrap().anchor, "return-history");
+        a.key(KeyCode::KeyE, true, false).unwrap();
+        a.key(KeyCode::KeyE, false, false).unwrap();
+        assert_eq!(a.world.current, original);
+        assert_eq!(a.themes[0].host.room, original_bounds);
+        let forward = [a.pose.yaw.sin(), -a.pose.yaw.cos()];
+        assert!(
+            forward[0] * n[0] + forward[1] * n[1] > 0.999,
+            "physical return should face into room from {id}, not back at that door; yaw={}",
+            a.pose.yaw
+        );
+        assert!(!a.themes[0].host.blocked(a.pose.position));
+        let offset = [a.pose.position[0] - at[0], a.pose.position[1] - at[2]];
+        assert!(
+            offset[0] * n[0] + offset[1] * n[1] > 0.5 && offset[0].hypot(offset[1]) < 2.5,
+            "return beside matching door"
+        );
+        assert_ne!(target(&a).map(|t| t.anchor), Some(id));
+        // Keyboard history keeps exact viewpoint/reader state independently.
+        a.world.reading = true;
+        a.scroll = 2;
+        let saved = a.pose;
+        a.web.as_mut().unwrap().fetcher = dense;
+        a.request_web(&destination, web_native::Mode::Follow)
+            .unwrap();
+        finish(&mut a);
+        a.web.as_mut().unwrap().fetcher = |_, _, _| panic!("keyboard Back must not fetch");
+        a.key(KeyCode::KeyR, true, false).unwrap();
+        a.key(KeyCode::KeyR, false, false).unwrap();
+        assert_eq!(
+            (a.pose.position, a.pose.yaw, a.pose.pitch),
+            (saved.position, saved.yaw, saved.pitch)
+        );
+        assert!(a.world.reading && a.scroll == 2);
+        a.world.reading = false;
+    }
 }
 
 #[test]

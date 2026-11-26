@@ -83,6 +83,8 @@ pub fn read_local(root: &Path, relative: &str, limit: u64) -> Result<Vec<u8>> {
             "local file {relative} must be regular and <= {limit} bytes"
         ));
     }
+    #[cfg(test)]
+    read_test_hook::run(relative);
     let mut bytes = Vec::new();
     held.take(limit + 1)
         .read_to_end(&mut bytes)
@@ -334,5 +336,26 @@ impl Site {
             images,
             skipped,
         })
+    }
+}
+// One-shot, thread-local test seam AFTER descriptor metadata admission. It changes
+// only an owned fixture, exercising the real finite read and post-read growth guard.
+#[cfg(test)]
+pub(crate) mod read_test_hook {
+    type Hook = (String, Box<dyn FnOnce()>);
+    std::thread_local! {
+        pub(crate) static AFTER_METADATA: std::cell::RefCell<Option<Hook>> = const { std::cell::RefCell::new(None) };
+    }
+    pub(super) fn run(relative: &str) {
+        AFTER_METADATA.with(|slot| {
+            if slot
+                .borrow()
+                .as_ref()
+                .is_some_and(|(path, _)| path == relative)
+            {
+                let (_, action) = slot.borrow_mut().take().unwrap();
+                action();
+            }
+        });
     }
 }

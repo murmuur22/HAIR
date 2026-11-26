@@ -546,12 +546,14 @@ mod tests {
     }
     fn inspection_view() -> folder_scene::View {
         folder_scene::View {
+            file_names: Default::default(),
             bindings: (0..2)
                 .map(|index| {
                     (
                         format!("entry-{index}"),
                         folder_scene::BoundEntry {
                             index,
+                            slot_index: index,
                             entry: Entry {
                                 name: "private\nname.mp4".into(),
                                 path: "/private/not-for-diagnostics".into(),
@@ -676,12 +678,14 @@ mod tests {
             kind: Kind::File,
         };
         let mut view = folder_scene::View {
+            file_names: Default::default(),
             bindings: (0..24)
                 .map(|index| {
                     (
                         format!("entry-{index}"),
                         folder_scene::BoundEntry {
                             index,
+                            slot_index: index,
                             entry: entry.clone(),
                         },
                     )

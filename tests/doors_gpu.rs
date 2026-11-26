@@ -364,6 +364,8 @@ fn all_categories_ui_export_and_visible_safe_doors() {
                 w.current = s.default_page.clone();
                 w.current_space = s.id.clone();
                 let pose = hair::Pose {
+                    eye_offset: 1.65,
+                    feet_y: 0.0,
                     position: s.scene.spawn,
                     yaw: 0.25,
                     pitch: -0.35,

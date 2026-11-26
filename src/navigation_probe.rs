@@ -6,6 +6,8 @@ const W: u32 = 960;
 const H: u32 = 640;
 fn pose() -> Pose {
     Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [0.0, -3.0],
         yaw: 0.0,
         pitch: -0.1,

@@ -38,6 +38,8 @@ fn ordinary_collision_page_groups_every_destination_instead_of_refusing() {
 fn aimed_group_cycles_fragments_forward_reverse_and_activation_matches_prompt() {
     let mut g=parse("<p>Visible</p><a href='/b?q=AB%2Fcd#one'>First place</a><a href='/b?q=AB%2Fcd#two'>Second place</a>").generate().unwrap();
     let pose = hair::Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [-3.6, g.host.room[1] + 0.5],
         yaw: 0.0,
         pitch: -0.2,
@@ -113,6 +115,8 @@ fn all_sixty_four_supported_targets_are_reachable_and_mutations_keep_geometry() 
         let a = full.host.anchors.iter().find(|a| a.id == d.anchor).unwrap();
         let n = full.host.portal_inward(&d.anchor);
         let p = hair::Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0] + n[0], a.at[2] + n[1]],
             yaw: (-n[0]).atan2(n[1]),
             pitch: -0.2,
@@ -272,6 +276,8 @@ fn maximum_literal_address_wraps_inside_minimum_view_and_missing_images_do_not_b
     let d = &g.doors[0];
     let a = g.host.anchors.iter().find(|a| a.id == d.anchor).unwrap();
     let pose = hair::Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [a.at[0], -2.8],
         yaw: 0.0,
         pitch: -0.2,

@@ -12,10 +12,32 @@ fn captures_reject_selected_site_and_pack_overlap_in_both_directions_and_aliases
         std::fs::create_dir(root.join("captures")).unwrap();
     }
     std::fs::write(site.join("index.md"), "# Read only\n").unwrap();
-    for entry in std::fs::read_dir(project.join("packs")).unwrap() {
-        let entry = entry.unwrap();
-        std::fs::copy(entry.path(), pack.join(entry.file_name())).unwrap();
+    fn copy_fixture_tree(source: &Path, destination: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let name = std::path::PathBuf::from(entry.file_name());
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                std::fs::create_dir(destination.join(&name)).unwrap();
+                files.extend(
+                    copy_fixture_tree(&entry.path(), &destination.join(&name))
+                        .into_iter()
+                        .map(|(path, bytes)| (name.join(path), bytes)),
+                );
+            } else {
+                assert!(
+                    kind.is_file(),
+                    "pack fixture must contain only regular files/directories"
+                );
+                let bytes = std::fs::read(entry.path()).unwrap();
+                std::fs::write(destination.join(&name), &bytes).unwrap();
+                files.push((name, bytes));
+            }
+        }
+        files
     }
+    let pack_files = copy_fixture_tree(&project.join("packs"), &pack);
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&site, p.join("site-alias")).unwrap();
@@ -86,12 +108,12 @@ fn captures_reject_selected_site_and_pack_overlap_in_both_directions_and_aliases
     );
     assert_eq!(std::fs::read_dir(site.join("captures")).unwrap().count(), 0);
     assert_eq!(std::fs::read_dir(pack.join("captures")).unwrap().count(), 0);
-    for entry in std::fs::read_dir(project.join("packs")).unwrap() {
-        let entry = entry.unwrap();
+    for (path, bytes) in pack_files {
         assert_eq!(
-            std::fs::read(entry.path()).unwrap(),
-            std::fs::read(pack.join(entry.file_name())).unwrap()
+            std::fs::read(project.join("packs").join(&path)).unwrap(),
+            bytes
         );
+        assert_eq!(std::fs::read(pack.join(&path)).unwrap(), bytes);
     }
     std::fs::remove_dir_all(&p).unwrap();
 }

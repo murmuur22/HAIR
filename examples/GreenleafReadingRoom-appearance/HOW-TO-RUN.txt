@@ -1,0 +1,10 @@
+Greenleaf Reading Room — appearance example, HAIR0.4.0 unreleased source
+
+This NEW derivative adds one host-owned decoration display envelope per space above existing solid landmarks. The original GreenleafReadingRoom-spaces example and old packages are unchanged. Geometry, room, spawn, old anchors and door/page/arrival bindings are identical; tests compare old anchors and sampled collision equality. Models remain constrained by display envelopes and never replace room layout.
+
+Development launch (not a packaged delivery):
+HAIR_RESOURCE_ROOT=/Users/angel/Developer/hair /Users/angel/.hermes/cache/scratch/hair-whole-pack/target/visitor/release/hair --site /Users/angel/Developer/hair/examples/GreenleafReadingRoom-appearance --pack /absolute/NEW-export/pack.toml
+
+WASD moves; click mouse-look; E reads/enters the prompt's nearby visible target. Tab/Shift+Tab cycles eligible world targets or reader links. Escape closes reader/releases mouse; M tree; T pack; R entry outside reader; Q exits. Only current room renders. Visitor status names the actual pack; HERE counts current applied/total model anchors, HOST counts matching/total across all rooms. UNMATCHED and FALLBACK are here/host counts of loaded unmatched role names and host anchors respectively. Content images excluded. A Decoration-only export applies here but has no matches in the frozen old spaces example.
+
+Workshop project supports Document+Decoration together with independent models/fit, NEW editable-v3 save/open and appearance-v2 export. No host layout exported. Native panel cancel/error/dirty protections remain. No door/first-person Workshop/material/network work in this slice. Full milestone NOT ready to test; fresh independent review/package/native/human qualification remain separate. Evidence: /Users/angel/.hermes/cache/scratch/hair-whole-pack. Original fictional content/PNG provenance remains in PROVENANCE.txt. Do not add Markdown pages without updating host and navigation membership.

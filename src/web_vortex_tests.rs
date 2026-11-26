@@ -184,7 +184,9 @@ fn vortex_disclosure_scroll_does_not_rebind_destination_or_consume_movement_and_
     a.key(KeyCode::ShiftLeft, true, false).unwrap();
     tap(&mut a, KeyCode::KeyM);
     a.key(KeyCode::ShiftLeft, false, false).unwrap();
-    assert_ne!(a.world.tree_collapsed, collapsed);
+    assert_eq!(a.world.tree_collapsed, collapsed);
+    assert!(!a.minimap_enabled);
+    tap(&mut a, KeyCode::Escape); // modal map owns R until explicitly closed
     tap(&mut a, KeyCode::KeyR);
     finish(&mut a);
     // Address and reader contexts never steal their arrows for disclosure.

@@ -259,6 +259,8 @@ fn recovery_notice_is_visible_survives_pack_and_clears_on_explicit_document_choi
         .find(|h| h.role == "document" && !h.id.starts_with("web-reading-"))
         .unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [document.at[0], document.at[2] + 1.5],
         yaw: 0.0,
         pitch: -0.1,

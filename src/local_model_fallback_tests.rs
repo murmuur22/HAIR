@@ -123,10 +123,15 @@ fn check_normal(scene: &[Vertex], baseline: &[Vertex], model: &Model, app: &App)
         .iter()
         .find(|a| a.id == "entry-0")
         .unwrap();
-    let center = [a.at[0], a.at[1] + a.size[1] * 0.5, a.at[2]];
+    let size = [0.8, 0.85, 0.28];
     let scale = (0..3)
-        .map(|i| a.size[i] / (model.max[i] - model.min[i]))
+        .map(|i| size[i] / (model.max[i] - model.min[i]))
         .fold(f32::INFINITY, f32::min);
+    let center = [
+        a.at[0],
+        a.at[1] + a.size[1] + 0.12 + (model.max[1] - model.min[1]) * scale * 0.5,
+        a.at[2],
+    ];
     assert!(scale.is_finite() && scale > 0.0);
     let actual: Vec<_> = scene
         .iter()
@@ -237,6 +242,8 @@ fn collapsed_glb_is_refused_without_success_presentation() {
         assert_eq!(a.role, "document");
         let inward = host.portal_inward(&a.id);
         app.pose = Pose {
+            eye_offset: 1.65,
+            feet_y: 0.0,
             position: [a.at[0] + 1.05 * inward[0], a.at[2] + 1.05 * inward[1]],
             yaw: (-inward[0]).atan2(inward[1]),
             pitch: ((a.at[1] + a.size[1] * 0.5 - 1.65) / 1.05).atan(),
@@ -252,9 +259,16 @@ fn collapsed_glb_is_refused_without_success_presentation() {
             "ordinary filename/kind labels included"
         );
         assert!(same_scene(
-            &baseline[..app.themes[0].vertices.len()],
-            &app.themes[0].vertices
+            &baseline[..host.vertices().len()],
+            &app.themes[0].vertices[..host.vertices().len()]
         ));
+        for vertex in app.themes[0].collection_shape("entry-0") {
+            assert!(
+                baseline
+                    .iter()
+                    .any(|v| bytemuck::bytes_of(v) == bytemuck::bytes_of(&vertex))
+            );
+        }
         assert!(!baseline.iter().any(|v| source_vertex(v, model)));
         let source = hair::folder_scene::display(bound.entry.path.as_os_str());
         let current = app.world.current.clone();
@@ -310,9 +324,20 @@ fn collapsed_glb_is_refused_without_success_presentation() {
                 assert!(app.world.reading && app.world.reader_link.is_none());
                 let document = app.world.document().unwrap();
                 let metadata = hair::folder_scene::metadata(&bound.entry);
-                let snapshot = document
+                let after_metadata = document
                     .strip_prefix(&metadata)
                     .expect("original metadata remains exact prefix");
+                // I now includes the full action status before the unchanged
+                // preview snapshot. Assert both sections exactly rather than
+                // mistaking this additive disclosure for preview success.
+                let action_status = if app.local_status.is_empty() {
+                    String::new()
+                } else {
+                    format!("\nSTATUS (full):\n{}\n", app.local_status)
+                };
+                let snapshot = after_metadata
+                    .strip_prefix(&action_status)
+                    .expect("full action status remains exact before preview status");
                 let expected_stage = if refusal {
                     "refused; held-source acquisition or preview processing refused; raw bytes retained\nTheme: not admitted (CPU admission map only)"
                 } else {

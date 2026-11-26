@@ -134,6 +134,8 @@ fn asynchronous_error_release_edit_retry_and_local_cancel_are_ordered() {
         .find(|x| x.role == "document")
         .unwrap();
     a.pose = Pose {
+        eye_offset: 1.65,
+        feet_y: 0.0,
         position: [document.at[0], document.at[2] + 1.5],
         yaw: 0.0,
         pitch: -0.1,

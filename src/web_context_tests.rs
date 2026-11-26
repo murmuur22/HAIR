@@ -49,8 +49,8 @@ fn web_room_shows_collapsible_graph_panel_without_fabricated_hierarchy() {
     w.tree_collapsed = true;
     let collapsed = crate::text::overlay(&w, 960, 640, 0);
     assert!(
-        collapsed.iter().any(|v| v.color == PANEL),
-        "collapsed header stays"
+        !collapsed.iter().any(|v| v.color == PANEL),
+        "OFF leaves no header remnant"
     );
     assert!(!collapsed.iter().any(|v| v.color == LINK));
     assert!(collapsed.len() < expanded.len());
@@ -117,8 +117,9 @@ fn web_reader_reserves_panel_space_and_footer_in_both_collapse_states() {
         w.tree_collapsed = collapsed;
         for (width, height) in [(960, 640), (640, 480)] {
             let ui = crate::text::overlay(&w, width, height, 0);
-            let panel_at = ui.iter().position(|v| v.color == PANEL).expect("panel");
-            let panel = bounds(&ui[panel_at..panel_at + 6], width, height);
+            let panel_at = ui.iter().position(|v| v.color == PANEL);
+            assert_eq!(panel_at.is_none(), collapsed, "OFF has no panel/header");
+            let panel = panel_at.map(|i| bounds(&ui[i..i + 6], width, height));
             let body: Vec<_> = ui
                 .iter()
                 .filter(|v| v.color == [0.9, 0.96, 0.91])
@@ -128,7 +129,7 @@ fn web_reader_reserves_panel_space_and_footer_in_both_collapse_states() {
             for quad in body.as_chunks::<6>().0 {
                 let b = bounds(quad, width, height);
                 assert!(
-                    b[0] > panel[2] + 0.01 || b[1] > panel[3] + 0.01,
+                    panel.is_none_or(|p| b[0] > p[2] + 0.01 || b[1] > p[3] + 0.01),
                     "reader ink under web panel: collapsed={collapsed}"
                 );
                 assert!(b[3] < height as f32 - 82.0, "body enters reader footer");
